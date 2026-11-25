@@ -94,6 +94,29 @@
   const setHeader = (colId: string, header: string) =>
     onCommand({ op: 'set_column_header', part, table: t.path, column: colId, header });
 
+  // --- Tabellendaten aus der Zwischenablage ---
+
+  /**
+   * Zerlegt eingefügten Text in Zeilen und Zellen: Tabulator (Excel, Word),
+   * sonst Semikolon. Ein einzelner Wert bleibt eine normale Texteingabe.
+   */
+  function parseBlock(text: string): string[][] | null {
+    const lines = text.replace(/\r?\n$/, '').split(/\r?\n/);
+    const delimiter = lines.some((l) => l.includes('\t')) ? '\t' : lines.every((l) => l.includes(';')) ? ';' : null;
+    if (lines.length === 1 && !delimiter) return null;
+    return lines.map((l) => (delimiter ? l.split(delimiter) : [l]).map((v) => v.trim()));
+  }
+
+  async function cellPaste(e: ClipboardEvent, r: number, c: number) {
+    const block = parseBlock(e.clipboardData?.getData('text/plain') ?? '');
+    if (!block) return;
+    e.preventDefault();
+    const rowId = t.rows[r]?.id;
+    const colId = t.columns[c]?.id;
+    await run({ op: 'paste_cells', part, table: t.path, row: r, column: c, cells: block });
+    focusCell(rowId, colId);
+  }
+
   // --- Tastatur ---
 
   function cellKey(e: KeyboardEvent, r: number, c: number) {
@@ -348,6 +371,7 @@
                   size={1}
                   onCommit={(v: string) => setCell(row.id, c.id, v)}
                   onKey={(e: KeyboardEvent) => cellKey(e, r, ci)}
+                  onpaste={(e: ClipboardEvent) => cellPaste(e, r, ci)}
                 />
                 {#if c.unit && c.unit_placement === 'value' && (row.cells[ci] ?? '').trim()}
                   <span class="unit">{c.unit}</span>

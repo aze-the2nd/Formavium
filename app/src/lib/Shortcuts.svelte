@@ -70,6 +70,7 @@
         ['Alt+↑ / Alt+↓', 'Zeile verschieben'],
         ['Alt+← / Alt+→', 'Spalte verschieben'],
         ['F2 am Spaltenkopf', 'Spalte umbenennen'],
+        ['Strg+V', 'Kopierte Zellen aus Excel oder Word ab der Zelle einsetzen'],
       ],
     },
     {

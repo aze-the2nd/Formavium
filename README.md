@@ -20,6 +20,8 @@ entsteht dieser Ordner von selbst.
     und über einer Spaltengrenze. Spalten am Kopf ziehen, Doppelklick benennt
     um. Ergänzte, entfernte und umbenannte Spalten gelten nur für diese
     Verwendung des Moduls.
+    Kopierte Zellen aus Excel oder Word füllen die Tabelle ab der
+    markierten Zelle und legen fehlende Zeilen an.
   - *Liste:* Eingabe legt den nächsten Punkt an, Rücktaste im leeren Punkt
     entfernt ihn.
   - *Bild:* anklicken, hineinziehen oder mit Strg+V einfügen.
@@ -179,7 +181,7 @@ damit Datei-Drops aus dem Explorer (Bilder) im selben Fenster funktionieren.
 - Die Installer sind noch nicht systematisch geprüft (frische VM,
   Standardbenutzer, ohne Netz, mit und ohne WebView2-Runtime).
 - Keine Code-Signatur (SmartScreen-Warnung beim Start des Installers).
-- Tabellenimport aus der Zwischenablage, Untermodule in der Werkstatt.
+- Untermodule in der Werkstatt, Modulupdates mit Abgleich lokaler Änderungen.
 
 ## Lizenz
 

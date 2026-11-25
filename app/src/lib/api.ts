@@ -106,6 +106,7 @@ export type Command =
   | { op: 'insert_row'; part: string; path: string; index: number }
   | { op: 'remove_row'; part: string; path: string; row: string }
   | { op: 'move_row'; part: string; path: string; row: string; to: number }
+  | { op: 'paste_cells'; part: string; table: string; row: number; column: number; cells: string[][] }
   | { op: 'insert_column'; part: string; table: string; index: number; header: string }
   | { op: 'remove_column'; part: string; table: string; column: string }
   | { op: 'set_column_header'; part: string; table: string; column: string; header: string }

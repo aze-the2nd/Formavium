@@ -277,3 +277,60 @@ fn local_columns_survive_save_and_load() {
     let plain = serde_json::to_string(&anleitung()).unwrap();
     assert!(!plain.contains("\"columns\":{"));
 }
+
+#[test]
+fn pasted_block_fills_cells_adds_rows_and_drops_overflow() {
+    let (mut ws, first, _) = workspace();
+    // Spalten in Anzeigereihenfolge umstellen: Länge, Bezeichnung, Menge.
+    apply(
+        &mut ws,
+        Command::MoveColumn {
+            part: first.clone(),
+            table: "tabelle".into(),
+            from: 2,
+            to: 0,
+        },
+    );
+    // Block ab Zeile 2, Spalte 2 (Bezeichnung): zwei Spalten breit passt,
+    // die dritte Spalte des Blocks liegt jenseits der Tabelle.
+    apply(
+        &mut ws,
+        Command::PasteCells {
+            part: first.clone(),
+            table: "tabelle".into(),
+            row: 1,
+            column: 1,
+            cells: vec![
+                vec!["Winkel B".into(), "6".into(), "zu viel".into()],
+                vec!["Mutter M4".into(), "12".into()],
+                vec!["Scheibe".into()],
+            ],
+        },
+    );
+    let text = generate(ws.project()).text;
+    assert!(text.contains("20 & Schraube M4 & 12~Stk. \\\\"), "{text}");
+    assert!(text.contains("12,5 & Winkel B & 6~Stk. \\\\"));
+    assert!(text.contains(" & Mutter M4 & 12~Stk. \\\\"));
+    assert!(text.contains(" & Scheibe &  \\\\"));
+    assert!(!text.contains("zu viel"));
+    assert_eq!(rows(&ws, &first).len(), 4);
+
+    // Ein Schritt im Verlauf.
+    ws.undo().unwrap();
+    assert_eq!(rows(&ws, &first).len(), 2);
+
+    let r = ws.revision();
+    assert_eq!(
+        ws.apply(
+            r,
+            Command::PasteCells {
+                part: first,
+                table: "tabelle".into(),
+                row: 9,
+                column: 0,
+                cells: vec![vec!["x".into()]],
+            }
+        ),
+        Err(EditError::OutOfRange(9))
+    );
+}

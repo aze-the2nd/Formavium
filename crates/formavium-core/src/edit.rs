@@ -68,6 +68,17 @@ pub enum Command {
         row: Id,
         to: usize,
     },
+    /// Zellblock ab einer Zelle einsetzen, etwa aus der Zwischenablage
+    /// (`table` ist das Tabellenelement, `row` und `column` zählen in der
+    /// angezeigten Reihenfolge). Fehlende Zeilen entstehen, Werte jenseits
+    /// der letzten Spalte entfallen.
+    PasteCells {
+        part: Id,
+        table: String,
+        row: usize,
+        column: usize,
+        cells: Vec<Vec<String>>,
+    },
     /// Spalte nur in dieser Verwendung ergänzen (`table` ist das
     /// Tabellenelement). Die Moduldefinition bleibt unverändert.
     InsertColumn {
@@ -403,6 +414,38 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             let r = rows.remove(i);
             rows.insert(to, r);
             set_rows(p, &part, path, rows);
+        }
+        Command::PasteCells {
+            part,
+            table,
+            row,
+            column,
+            cells,
+        } => {
+            let (columns, rows_path) = local_columns(p, &part, &table)?;
+            let mut rows = table_rows(p, &part, &rows_path)?;
+            if row > rows.len() || cells.len() > 5000 {
+                return Err(EditError::OutOfRange(row));
+            }
+            for (offset, line) in cells.into_iter().enumerate() {
+                let at = row + offset;
+                if at == rows.len() {
+                    let id = loop {
+                        let id = p.fresh_id("r");
+                        if rows.iter().all(|r| r.id != id) {
+                            break id;
+                        }
+                    };
+                    rows.push(Row {
+                        id,
+                        cells: BTreeMap::new(),
+                    });
+                }
+                for (col, value) in columns.iter().skip(column).zip(line) {
+                    rows[at].cells.insert(col.id.clone(), value);
+                }
+            }
+            set_rows(p, &part, rows_path, rows);
         }
         Command::InsertColumn {
             part,
