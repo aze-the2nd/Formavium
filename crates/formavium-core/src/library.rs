@@ -499,3 +499,50 @@ fn validate_body<'a>(
         .all(|e| find_element(body, e.id.as_str()).is_some()));
     Ok(())
 }
+
+impl Library {
+    /// Dateien des eigenen Ordners, die sich nicht verwenden lassen, je mit
+    /// dem Grund. Die Bibliothek überspringt sie sonst stillschweigend.
+    pub fn problems(&self) -> Vec<(PathBuf, String)> {
+        let mut out = Vec::new();
+        let Some(dir) = &self.user else {
+            return out;
+        };
+        for entry in fs::read_dir(dir.join("module"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|x| x == "json") {
+                if let Err(e) = read_module(&path) {
+                    out.push((path, e.to_string()));
+                }
+            }
+        }
+        for entry in fs::read_dir(dir.join("vorlagen"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path().join(TEMPLATE_FILE);
+            if !entry.path().is_dir() {
+                continue;
+            }
+            match fvm::load(&path) {
+                Err(e) => out.push((path, e.to_string())),
+                Ok((project, _)) => {
+                    for def in &project.modules {
+                        if let Err(e) = validate_module(def) {
+                            out.push((path.clone(), format!("Modul {}: {e}", def.id)));
+                        }
+                    }
+                    for notice in crate::generate(&project).notices {
+                        out.push((path.clone(), notice.message));
+                    }
+                }
+            }
+        }
+        out
+    }
+}

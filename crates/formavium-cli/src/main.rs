@@ -14,6 +14,7 @@ Verwendung:
   formavium new <datei.fvm> [vorlage]             Dokument aus einer mitgelieferten Vorlage
                                                   anlegen (ohne Angabe: montageanleitung)
   formavium templates                             Mitgelieferte Vorlagen auflisten
+  formavium library <ordner>                      Eigene Bibliothek prüfen und auflisten
   formavium info <datei.fvm>                      Teile, Module und Felder anzeigen
   formavium latex <datei.fvm>                     Erzeugtes main.tex ausgeben
   formavium render <datei.fvm> [-o <pdf>] [--offline]
@@ -37,12 +38,43 @@ fn main() -> ExitCode {
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Listet die eigenen Module und Vorlagen eines Bibliotheksordners und
+/// meldet Dateien, die sich nicht verwenden lassen.
+fn cmd_library(dir: &Path) -> Result<ExitCode> {
+    use formavium_core::library::Source;
+    let library = Library::new(Some(dir.to_owned()));
+    for m in library
+        .modules()
+        .iter()
+        .filter(|m| m.source == Source::User)
+    {
+        println!("Modul    {}@{}  {}", m.def.id, m.def.version, m.def.name);
+    }
+    for t in library
+        .templates()
+        .iter()
+        .filter(|t| t.source == Source::User)
+    {
+        println!("Vorlage  {}  {}", t.id, t.project.title);
+    }
+    let problems = library.problems();
+    for (path, reason) in &problems {
+        eprintln!("FEHLER   {}: {reason}", path.display());
+    }
+    Ok(if problems.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
 fn run(args: &[String]) -> Result<ExitCode> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
         ["new", file] => cmd_new(Path::new(file), "montageanleitung"),
         ["new", file, template] => cmd_new(Path::new(file), template),
         ["templates"] => cmd_templates(),
+        ["library", dir] => cmd_library(Path::new(dir)),
         ["info", file] => cmd_info(Path::new(file)),
         ["latex", file] => {
             let (p, _) = io::load(Path::new(file))?;

@@ -47,22 +47,27 @@ rm -rf "$SEED"
 mkdir -p "$SEED"
 WORK=$(mktemp -d)
 cp "$ROOT"/docker/tex-corpus/*.tex "$WORK/"
-# Das Übungsdokument der App gehört ebenfalls dazu.
+# Alle mitgelieferten Vorlagen der App gehören ebenfalls dazu.
 cargo build -q -p formavium-cli
-"$TARGET_DIR/debug/formavium" new "$WORK/sample/anleitung.fvm" >/dev/null
-"$TARGET_DIR/debug/formavium" latex "$WORK/sample/anleitung.fvm" > "$WORK/sample/main.tex"
-for doc in "$WORK"/*.tex "$WORK/sample/main.tex"; do
+CLI=$TARGET_DIR/debug/formavium
+for t in $("$CLI" templates | cut -d' ' -f1); do
+  "$CLI" new "$WORK/vorlage-$t/main.fvm" "$t" >/dev/null
+  "$CLI" latex "$WORK/vorlage-$t/main.fvm" > "$WORK/vorlage-$t/main.tex"
+done
+for doc in "$WORK"/*.tex "$WORK"/vorlage-*/main.tex; do
   (cd "$(dirname "$doc")" && TECTONIC_CACHE_DIR=$SEED tectonic -X compile "$(basename "$doc")" --untrusted >/dev/null 2>&1) \
     || { echo "Korpusdokument fehlgeschlagen: $doc"; exit 1; }
 done
 # Gegenprobe: alles muss ohne Nachladen kompilieren.
-for doc in "$WORK"/*.tex "$WORK/sample/main.tex"; do
+for doc in "$WORK"/*.tex "$WORK"/vorlage-*/main.tex; do
   (cd "$(dirname "$doc")" && TECTONIC_CACHE_DIR=$SEED tectonic -X compile "$(basename "$doc")" --untrusted --only-cached >/dev/null 2>&1) \
     || { echo "Offline-Gegenprobe fehlgeschlagen: $doc"; exit 1; }
-  echo "  ok  $(basename "$doc")"
+  echo "  ok  ${doc#"$WORK"/}"
 done
 rm -rf "$WORK"
-SEED_HASH=$( (cd "$ROOT/docker/tex-corpus" && cat *.tex; echo "$TECTONIC_VERSION") | sha256sum | cut -c1-16)
+# Die Kennung ändert sich mit Korpus, Vorlagen und Engine. Die App ersetzt
+# den Cache des Anwenders nur bei neuer Kennung.
+SEED_HASH=$( (cd "$ROOT/docker/tex-corpus" && cat *.tex; "$CLI" templates; cat "$ROOT/crates/formavium-core/src/builtin.rs"; echo "$TECTONIC_VERSION") | sha256sum | cut -c1-16)
 SEED_ID="tectonic-$TECTONIC_VERSION-$SEED_HASH"
 echo "$SEED_ID" > "$SEED/SEED_ID"
 rm -rf "$TAURI/resources/tex-cache"

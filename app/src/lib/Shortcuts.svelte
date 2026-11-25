@@ -12,12 +12,32 @@
     {
       title: 'Dokument',
       keys: [
-        ['Strg+N', 'Übungsdokument anlegen'],
+        ['Strg+K', 'Befehlspalette: jeder Befehl, jedes Modul, jede Vorlage'],
+        ['Strg+N', 'Neues Dokument aus einer Vorlage'],
         ['Strg+O', 'Dokument öffnen'],
         ['Strg+S', 'Speichern'],
         ['Strg+P', 'Als PDF speichern'],
         ['Strg+Umschalt+E', 'LaTeX exportieren'],
+        ['Strg+W', 'Dokument schließen'],
         ['Strg+Z / Strg+Y', 'Rückgängig / Wiederholen'],
+        ['Strg+Umschalt+F', 'Feedback senden'],
+      ],
+    },
+    {
+      title: 'Module',
+      keys: [
+        ['Strg+M', 'Modul aus der Bibliothek einfügen'],
+        ['Doppelklick auf den Modulkopf', 'Modul-Werkstatt öffnen'],
+        ['Esc in der Werkstatt', 'Werkstatt schließen'],
+        ['Rechtsklick in der Auswahl', 'Eigenen Eintrag löschen'],
+      ],
+    },
+    {
+      title: 'Liste',
+      keys: [
+        ['Eingabe', 'Nächster Punkt'],
+        ['Rücktaste im leeren Punkt', 'Punkt entfernen'],
+        ['Alt+↑ / Alt+↓', 'Punkt verschieben'],
       ],
     },
     {
