@@ -4,12 +4,18 @@
   import VisualView from './lib/VisualView.svelte';
   import PdfView from './lib/PdfView.svelte';
   import Dialog from './lib/Dialog.svelte';
+  import Feedback from './lib/Feedback.svelte';
   import Menu from './lib/Menu.svelte';
+  import Menubar from './lib/Menubar.svelte';
+  import Palette from './lib/Palette.svelte';
   import Shortcuts from './lib/Shortcuts.svelte';
+  import { runShortcut, type Cmd } from './lib/commands';
   import { confirmDialog } from './lib/dialogs.svelte';
+  import { REPO, openInBrowser } from './lib/feedback';
   import { openMenuBelow, type MenuItem } from './lib/menus.svelte';
   import { clearResources } from './lib/resources';
-  import { notify, toastState } from './lib/toast.svelte';
+  import { dismissToast, notify, toastState } from './lib/toast.svelte';
+  import { checkForUpdate, installUpdate, startAutoUpdate, updateState } from './lib/updates.svelte';
   import {
     call,
     isTauri,
@@ -28,6 +34,8 @@
   let preview = $state<Preview | null>(null);
   let sourceView = $state<SourceView>();
   let showKeys = $state(false);
+  let showPalette = $state(false);
+  let showFeedback = $state(false);
 
   const fvm = [{ name: 'Formavium-Dokument', extensions: ['fvm'] }];
   const defaultDir = isTauri ? '' : '/work/out/';
@@ -51,12 +59,35 @@
   }
 
   let pollTimer: ReturnType<typeof setInterval>;
+  let unlistenClose: (() => void) | undefined;
   onMount(async () => {
     doc = (await guarded(() => call<Doc | null>('state'))) ?? null;
     pollTimer = setInterval(pollPreview, 300);
     pollPreview();
+    guardClose();
+    startAutoUpdate(() => !doc);
   });
-  onDestroy(() => clearInterval(pollTimer));
+  onDestroy(() => {
+    clearInterval(pollTimer);
+    unlistenClose?.();
+  });
+
+  /** Fenster nicht mit ungespeicherten Änderungen schließen, ohne zu fragen. */
+  async function guardClose() {
+    if (!isTauri) return;
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
+      if (!doc?.dirty) return;
+      const discard = await confirmDialog({
+        title: 'Ungespeicherte Änderungen',
+        message: `„${doc.title}“ wurde geändert und noch nicht gespeichert.`,
+        okLabel: 'Verwerfen und schließen',
+        cancelLabel: 'Zurück zum Dokument',
+        danger: true,
+      });
+      if (!discard) event.preventDefault();
+    });
+  }
 
   $effect(() => {
     document.title = doc ? `${doc.title}${doc.dirty ? ' •' : ''} – Formavium` : 'Formavium';
@@ -113,29 +144,67 @@
   const undo = () => history('undo');
   const redo = () => history('redo');
 
-  async function save() {
-    if (!doc) return;
+  async function save(): Promise<boolean> {
+    if (!doc) return false;
     const d = await enqueue(() => guarded(() => call<Doc>('save')));
-    if (d) {
-      doc = d;
-      notify('info', `Gespeichert: ${d.path}`);
+    if (!d) return false;
+    doc = d;
+    notify('info', `Gespeichert: ${d.path}`);
+    return true;
+  }
+
+  // Zuletzt geöffnete Dokumente (nur auf diesem Rechner gemerkt).
+  function loadRecent(): string[] {
+    try {
+      const list = JSON.parse(localStorage.getItem('formavium.recent') ?? '[]');
+      return Array.isArray(list) ? list.filter((p) => typeof p === 'string').slice(0, 8) : [];
+    } catch {
+      return [];
     }
   }
+  let recent = $state(loadRecent());
+  function remember(path: string) {
+    recent = [path, ...recent.filter((p) => p !== path)].slice(0, 8);
+    try {
+      localStorage.setItem('formavium.recent', JSON.stringify(recent));
+    } catch {
+      /* ohne Speicher keine Liste */
+    }
+  }
+  const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
   function opened(d: Doc) {
     clearResources();
     doc = d;
     preview = null;
+    remember(d.path);
   }
 
-  async function openDoc() {
-    const path = await pickOpen('Dokument öffnen', fvm, `${defaultDir}anleitung.fvm`);
-    if (!path) return;
+  /** Vor dem Wechsel des Dokuments nach ungespeicherten Änderungen fragen. */
+  async function mayLeave(): Promise<boolean> {
+    if (!doc?.dirty) return true;
+    return confirmDialog({
+      title: 'Ungespeicherte Änderungen',
+      message: `„${doc.title}“ wurde geändert und noch nicht gespeichert.`,
+      okLabel: 'Änderungen verwerfen',
+      cancelLabel: 'Zurück zum Dokument',
+      danger: true,
+    });
+  }
+
+  async function openPath(path: string) {
+    if (!(await mayLeave())) return;
     const d = await guarded(() => call<Doc>('open', { path }));
     if (d) opened(d);
   }
 
+  async function openDoc() {
+    const path = await pickOpen('Dokument öffnen', fvm, `${defaultDir}anleitung.fvm`);
+    if (path) await openPath(path);
+  }
+
   async function newSample() {
+    if (!(await mayLeave())) return;
     const path = await pickSave('Übungsdokument „Montageanleitung“ anlegen', fvm, `${defaultDir}anleitung.fvm`);
     if (!path) return;
     const d = await guarded(() => call<Doc>('new_sample', { path }));
@@ -189,6 +258,35 @@
     if (r) await command({ op: 'set_value', part, path: field, value: { type: 'image', value: r.path } });
   }
 
+  // --- Updates ---
+
+  async function updateNow() {
+    if (doc?.dirty) {
+      const ok = await confirmDialog({
+        title: `Formavium ${updateState.version} installieren`,
+        message: 'Die App startet dafür neu. Das Dokument wird vorher gespeichert.',
+        okLabel: 'Speichern und aktualisieren',
+      });
+      if (!ok || !(await save())) return;
+    }
+    await installUpdate(true);
+  }
+
+  async function searchUpdate() {
+    if (await checkForUpdate(false)) await updateNow();
+  }
+
+  function about() {
+    confirmDialog({
+      title: `Formavium ${updateState.current ?? '(Entwicklung)'}`,
+      message: `Strukturierte, modulbasierte LaTeX-Dokumente. Lokal, offline, ohne Adminrechte.\n\nQuelltext und Lizenz (MIT): github.com/${REPO}`,
+      okLabel: 'Zum Repository',
+      cancelLabel: 'Schließen',
+    }).then((go) => {
+      if (go) openInBrowser(`https://github.com/${REPO}`);
+    });
+  }
+
   // --- Ansichten als Kacheln: umordnen, Breite ändern, ein- und ausblenden ---
 
   type PaneKey = 'source' | 'visual' | 'pdf';
@@ -201,12 +299,14 @@
   };
   type Layout = { order: PaneKey[]; show: Record<PaneKey, boolean>; size: Record<PaneKey, number> };
 
+  const defaultLayout = (): Layout => ({
+    order: [...paneKeys],
+    show: { source: true, visual: true, pdf: true },
+    size: { source: 1, visual: 1, pdf: 1 },
+  });
+
   function loadLayout(): Layout {
-    const layout: Layout = {
-      order: [...paneKeys],
-      show: { source: true, visual: true, pdf: true },
-      size: { source: 1, visual: 1, pdf: 1 },
-    };
+    const layout = defaultLayout();
     try {
       const saved = JSON.parse(localStorage.getItem('formavium.layout') ?? 'null') as Partial<Layout> | null;
       if (!saved) return layout;
@@ -372,31 +472,57 @@
   );
   let errorParts = $derived(errorDiags.flatMap((d) => (d.part ? [d.part] : [])));
 
+  // --- Befehle: eine Liste für Menüleiste, Palette und Tastenkürzel ---
+
+  let commands = $derived.by((): Cmd[] => {
+    const has = !!doc;
+    return [
+      { id: 'new', title: 'Übungsdokument anlegen …', group: 'Datei', keys: 'Strg+N', run: newSample },
+      { id: 'open', title: 'Öffnen …', group: 'Datei', keys: 'Strg+O', run: openDoc },
+      ...recent.slice(0, 5).map(
+        (path, i): Cmd => ({
+          id: `recent:${path}`,
+          title: fileName(path),
+          detail: path,
+          group: 'Datei',
+          heading: i === 0 ? 'Zuletzt geöffnet' : undefined,
+          enabled: path !== doc?.path,
+          run: () => openPath(path),
+        }),
+      ),
+      { id: 'save', title: 'Speichern', group: 'Datei', keys: 'Strg+S', divider: true, enabled: has, run: save },
+      { id: 'pdf', title: 'Als PDF speichern …', group: 'Datei', keys: 'Strg+P', divider: true, enabled: has && !!preview?.shown_revision, run: savePdf },
+      { id: 'export', title: 'LaTeX exportieren …', group: 'Datei', keys: 'Strg+Umschalt+E', enabled: has, run: exportLatex },
+
+      { id: 'undo', title: 'Rückgängig', group: 'Bearbeiten', keys: 'Strg+Z', notInFields: true, enabled: !!doc?.can_undo, run: undo },
+      { id: 'redo', title: 'Wiederholen', group: 'Bearbeiten', keys: 'Strg+Y', notInFields: true, enabled: !!doc?.can_redo, run: redo },
+      { id: 'redo2', title: 'Wiederholen', group: 'Bearbeiten', keys: 'Strg+Umschalt+Z', notInFields: true, paletteOnly: true, enabled: false, run: redo },
+
+      ...paneKeys.map(
+        (key, i): Cmd => ({
+          id: `view:${key}`,
+          title: paneTitle[key],
+          group: 'Ansicht',
+          keys: `Strg+${i + 1}`,
+          checked: layout.show[key],
+          enabled: has,
+          run: () => toggle(key),
+        }),
+      ),
+      { id: 'layout-reset', title: 'Anordnung zurücksetzen', group: 'Ansicht', divider: true, run: () => (layout = defaultLayout()) },
+      { id: 'palette', title: 'Befehlspalette', group: 'Ansicht', keys: 'Strg+K', divider: true, run: () => (showPalette = true) },
+
+      { id: 'keys', title: 'Tastenkürzel', group: 'Hilfe', keys: 'F1', run: () => (showKeys = !showKeys) },
+      { id: 'feedback', title: 'Feedback senden …', group: 'Hilfe', keys: 'Strg+Umschalt+F', run: () => (showFeedback = true) },
+      { id: 'update', title: 'Nach Updates suchen', group: 'Hilfe', divider: true, run: searchUpdate },
+      { id: 'about', title: 'Über Formavium', group: 'Hilfe', run: about },
+    ];
+  });
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'F1') {
-      e.preventDefault();
-      showKeys = !showKeys;
-      return;
-    }
-    const mod = e.ctrlKey || e.metaKey;
-    if (!mod || e.altKey) return;
-    const k = e.key.toLowerCase();
-    const run = (fn: () => unknown) => {
-      e.preventDefault();
-      fn();
-    };
-    if (k === 's' && !e.shiftKey) return run(save);
-    if (k === 'o' && !e.shiftKey) return run(openDoc);
-    if (k === 'n' && !e.shiftKey) return run(newSample);
-    if (k === 'p' && !e.shiftKey) return run(savePdf);
-    if (k === 'e' && e.shiftKey) return run(exportLatex);
-    if (doc && !e.shiftKey && (k === '1' || k === '2' || k === '3')) {
-      return run(() => toggle(paneKeys[Number(k) - 1]));
-    }
-    // In Textfeldern gilt das Rückgängig des Feldes bzw. des Quelltexteditors.
-    if ((e.target as HTMLElement).closest('input, textarea, .cm-editor')) return;
-    if (k === 'z' && !e.shiftKey) run(undo);
-    else if (k === 'y' || (k === 'z' && e.shiftKey)) run(redo);
+    // Strg+Umschalt+Z ist ein zweites Kürzel für Wiederholen.
+    const all = commands.map((c) => (c.id === 'redo2' ? { ...c, enabled: !!doc?.can_redo } : c));
+    runShortcut(e, all);
   }
 
   // Dateien, die neben einer Bildfläche landen, nicht im Fenster öffnen.
@@ -416,19 +542,7 @@
       <span class="word">formavium</span>
     </div>
 
-    <nav class="group" aria-label="Datei">
-      <button onclick={newSample} title="Übungsdokument anlegen (Strg+N)">Neu</button>
-      <button onclick={openDoc} title="Strg+O">Öffnen…</button>
-      <button onclick={save} disabled={!doc} title="Strg+S">Speichern</button>
-    </nav>
-    <nav class="group" aria-label="Bearbeiten">
-      <button onclick={undo} disabled={!doc?.can_undo} title="Rückgängig (Strg+Z)">↶</button>
-      <button onclick={redo} disabled={!doc?.can_redo} title="Wiederholen (Strg+Y)">↷</button>
-    </nav>
-    <nav class="group" aria-label="Ausgabe">
-      <button onclick={savePdf} disabled={!doc || !preview?.shown_revision} title="Strg+P">Als PDF speichern</button>
-      <button onclick={exportLatex} disabled={!doc} title="Strg+Umschalt+E">LaTeX exportieren</button>
-    </nav>
+    <Menubar {commands} />
 
     <div class="doc-title">
       {#if doc}
@@ -438,12 +552,17 @@
       {/if}
     </div>
 
+    <button class="search" title="Befehlspalette (Strg+K)" onclick={() => (showPalette = true)}>
+      <span>Befehle suchen</span><kbd>Strg+K</kbd>
+    </button>
+
     <div class="views" role="group" aria-label="Ansichten">
       {#each paneKeys as key, i}
         <button
           class:on={layout.show[key]}
           aria-pressed={layout.show[key]}
           title="Strg+{i + 1}"
+          disabled={!doc}
           onclick={() => toggle(key)}>{paneTitle[key]}</button
         >
       {/each}
@@ -506,14 +625,6 @@
         </section>
       {/each}
     </main>
-    <footer class="statusbar">
-      <span>Revision {doc.revision}</span>
-      <span>{doc.parts.length} Abschnitte</span>
-      {#if doc.notices.length}<span class="warn">{doc.notices.length} Hinweise</span>{/if}
-      <span class="spacer"></span>
-      <button class="keys" onclick={() => (showKeys = true)}>Tastenkürzel · F1</button>
-      <span>{isTauri ? 'Desktop' : 'Browser · Dev-Bridge'}</span>
-    </footer>
   {:else}
     <main class="welcome">
       <div class="card">
@@ -521,17 +632,81 @@
         <p>Beginne mit dem Übungsdokument „Montageanleitung“: zwei Materiallisten, freies LaTeX und eine PDF-Vorschau.</p>
         <div class="actions">
           <button class="primary" onclick={newSample}>Übungsdokument anlegen</button>
-          <button class="ghost" onclick={openDoc}>Dokument öffnen…</button>
+          <button class="ghost" onclick={openDoc}>Dokument öffnen …</button>
         </div>
+        {#if recent.length}
+          <h2>Zuletzt geöffnet</h2>
+          <ul class="recent">
+            {#each recent.slice(0, 5) as path}
+              <li>
+                <button onclick={() => openPath(path)}>
+                  <span class="file">{fileName(path)}</span>
+                  <span class="dir">{path}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
     </main>
   {/if}
 
+  <footer class="statusbar">
+    {#if doc}
+      <span>Revision {doc.revision}</span>
+      <span>{doc.parts.length} Abschnitte</span>
+      {#if doc.notices.length}<span class="warn">{doc.notices.length} Hinweise</span>{/if}
+    {/if}
+    <span class="spacer"></span>
+    {#if updateState.phase === 'pending'}
+      <button class="chip" onclick={updateNow} title="Die App startet dafür neu">
+        Update {updateState.version} installieren
+      </button>
+    {:else if updateState.phase === 'downloading' || updateState.phase === 'installing'}
+      <span>Update {updateState.version} {Math.round((updateState.progress ?? 0) * 100)} %</span>
+    {/if}
+    <button class="quiet" onclick={() => (showFeedback = true)} title="Fehler melden oder Idee einreichen (Strg+Umschalt+F)">
+      Feedback
+    </button>
+    <button class="quiet" onclick={() => (showKeys = true)}>Tastenkürzel · F1</button>
+    <span>{isTauri ? `Version ${updateState.current ?? ''}` : 'Browser · Dev-Bridge'}</span>
+  </footer>
+
   {#if toastState.current}
-    <div class="toast {toastState.current.kind}" role="status">{toastState.current.text}</div>
+    {@const t = toastState.current}
+    <div class="toast {t.kind}" role="status">
+      <span>{t.text}</span>
+      {#if t.action}
+        <button
+          onclick={() => {
+            t.action?.run();
+            dismissToast();
+          }}>{t.action.label}</button
+        >
+      {/if}
+    </div>
   {/if}
+
+  {#if updateState.blocking && (updateState.phase === 'downloading' || updateState.phase === 'installing')}
+    <div class="updating" role="alertdialog" aria-modal="true" aria-label="Update wird installiert">
+      <div class="update-card">
+        <h2>Formavium {updateState.version} wird installiert</h2>
+        <p>
+          {updateState.phase === 'installing'
+            ? 'Die App startet gleich neu.'
+            : 'Die neue Version wird geladen. Danach startet die App neu.'}
+        </p>
+        <div class="meter" class:busy={updateState.progress === null || updateState.phase === 'installing'}>
+          <div style:width="{Math.round((updateState.progress ?? 0) * 100)}%"></div>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <Menu />
+  <Palette bind:open={showPalette} {commands} />
   <Shortcuts bind:open={showKeys} />
+  <Feedback bind:open={showFeedback} version={updateState.current} views={visible.map((k) => paneTitle[k])} />
   <Dialog />
 </div>
 
@@ -544,8 +719,8 @@
   .bar {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 8px 14px;
+    gap: 12px;
+    padding: 6px 14px;
     background: var(--panel);
     border-bottom: 1px solid var(--line);
     min-width: 0;
@@ -554,7 +729,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-right: 6px;
+    margin-right: 2px;
   }
   .mark {
     width: 26px;
@@ -572,32 +747,6 @@
   .word {
     font-weight: 650;
     letter-spacing: -0.01em;
-  }
-  .group {
-    display: flex;
-    gap: 2px;
-    padding-left: 12px;
-    border-left: 1px solid var(--line);
-  }
-  .bar button {
-    font: inherit;
-    font-size: 13px;
-    padding: 5px 10px;
-    border-radius: 6px;
-    border: 1px solid transparent;
-    background: none;
-    color: var(--text);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .bar button:hover:not(:disabled) {
-    background: var(--panel-2);
-    border-color: var(--line);
-  }
-  .bar button:disabled {
-    color: var(--muted);
-    opacity: 0.5;
-    cursor: default;
   }
   .doc-title {
     flex: 1;
@@ -624,6 +773,31 @@
     text-overflow: ellipsis;
     font-family: var(--mono);
   }
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 8px 5px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .search:hover {
+    border-color: var(--line-strong);
+    color: var(--text);
+  }
+  .search kbd {
+    font: inherit;
+    font-size: 11px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0 4px;
+  }
   .views {
     display: flex;
     background: var(--panel-2);
@@ -632,10 +806,21 @@
     padding: 2px;
   }
   .views button {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 10px;
     border-radius: 6px;
+    border: 1px solid transparent;
+    background: none;
     color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
   }
-  .views button.on {
+  .views button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .views button.on:not(:disabled) {
     background: var(--panel);
     color: var(--text);
     border-color: var(--line);
@@ -732,6 +917,7 @@
 
   .statusbar {
     display: flex;
+    align-items: center;
     gap: 16px;
     padding: 4px 14px;
     font-size: 11px;
@@ -745,7 +931,7 @@
   .statusbar .warn {
     color: var(--warn);
   }
-  .statusbar .keys {
+  .statusbar .quiet {
     font: inherit;
     color: inherit;
     background: none;
@@ -753,18 +939,29 @@
     padding: 0;
     cursor: pointer;
   }
-  .statusbar .keys:hover {
+  .statusbar .quiet:hover {
     color: var(--text);
     text-decoration: underline;
+  }
+  .statusbar .chip {
+    font: inherit;
+    font-weight: 600;
+    color: white;
+    background: var(--accent);
+    border: none;
+    border-radius: 10px;
+    padding: 1px 10px;
+    cursor: pointer;
   }
   .welcome {
     display: grid;
     place-items: center;
     background: var(--panel-2);
     padding: 16px;
+    overflow: auto;
   }
   .card {
-    max-width: 520px;
+    width: min(560px, 100%);
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;
@@ -782,15 +979,59 @@
     line-height: 1.55;
     margin: 0 0 22px;
   }
+  .card h2 {
+    margin: 26px 0 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
   .actions {
     display: flex;
     gap: 10px;
+  }
+  .recent {
+    list-style: none;
+    margin: 0 -8px;
+    padding: 0;
+  }
+  .recent button {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    background: none;
+    border: none;
+    border-radius: 7px;
+    padding: 6px 8px;
+    cursor: pointer;
+  }
+  .recent button:hover {
+    background: var(--panel-2);
+  }
+  .recent .file {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .recent .dir {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .toast {
     position: fixed;
     bottom: 34px;
     left: 50%;
     transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 14px;
     max-width: min(640px, calc(100vw - 32px));
     padding: 10px 16px;
     border-radius: 8px;
@@ -803,5 +1044,64 @@
   .toast.error {
     background: var(--danger);
     color: white;
+  }
+  .toast button {
+    font: inherit;
+    font-weight: 600;
+    color: inherit;
+    background: none;
+    border: 1px solid currentColor;
+    border-radius: 6px;
+    padding: 2px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .updating {
+    position: fixed;
+    inset: 0;
+    z-index: 120;
+    display: grid;
+    place-items: center;
+    background: rgba(15, 20, 30, 0.45);
+  }
+  .update-card {
+    width: min(420px, calc(100vw - 32px));
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 24px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  }
+  .update-card h2 {
+    margin: 0 0 6px;
+    font-size: 16px;
+  }
+  .update-card p {
+    margin: 0 0 14px;
+    color: var(--text-2);
+    font-size: 13px;
+  }
+  .meter {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--line);
+    overflow: hidden;
+  }
+  .meter div {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s;
+  }
+  .meter.busy div {
+    width: 40% !important;
+    animation: slide 1.1s ease-in-out infinite alternate;
+  }
+  @keyframes slide {
+    from {
+      transform: translateX(-20%);
+    }
+    to {
+      transform: translateX(170%);
+    }
   }
 </style>

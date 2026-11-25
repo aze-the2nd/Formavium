@@ -25,6 +25,15 @@
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost; font-src 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE4RkY3RDdDQTE4Njk3RTEKUldUaGw0YWhmSDMvcUFGbkFuYzBSR0dyYnpQaFV6WEM5MDh3L1U2UDU0U2JxNkE3NGJlKzlML2oK",
+      "endpoints": ["https://github.com/aze-the2nd/Formavium/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],

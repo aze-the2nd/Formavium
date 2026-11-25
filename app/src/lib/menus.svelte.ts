@@ -4,28 +4,51 @@
 import { notify } from './toast.svelte';
 
 export type MenuItem =
-  | { label: string; hint?: string; danger?: boolean; disabled?: boolean; action: () => void }
+  | {
+      label: string;
+      hint?: string;
+      danger?: boolean;
+      disabled?: boolean;
+      /** Häkchen für ein- und ausschaltbare Einträge. */
+      checked?: boolean;
+      action: () => void;
+    }
   | { separator: true }
   | { heading: string };
 
-type OpenMenu = { x: number; y: number; items: MenuItem[]; restore: HTMLElement | null };
+type OpenMenu = {
+  x: number;
+  y: number;
+  items: MenuItem[];
+  restore: HTMLElement | null;
+  /** Kennung des Auslösers, etwa ein Titel der Menüleiste. */
+  owner?: string;
+};
 
 export const menuState = $state<{ current: OpenMenu | null }>({ current: null });
 
-export function openMenu(at: { x: number; y: number }, items: MenuItem[]) {
-  const restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  menuState.current = { x: at.x, y: at.y, items, restore };
+/** Zuletzt geschlossenes Menü: Ein Klick auf denselben Titel öffnet es nicht sofort wieder. */
+export const lastClosed = { owner: undefined as string | undefined, at: 0 };
+
+export function openMenu(at: { x: number; y: number }, items: MenuItem[], owner?: string) {
+  const previous = menuState.current?.restore;
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  // Beim Wechsel zwischen Menüs bleibt das ursprüngliche Fokusziel erhalten.
+  const restore = previous && active?.closest('.menu') ? previous : active;
+  menuState.current = { x: at.x, y: at.y, items, restore, owner };
 }
 
 /** Menü unter einem Element öffnen (Klick auf einen Griff). */
-export function openMenuBelow(el: Element, items: MenuItem[]) {
+export function openMenuBelow(el: Element, items: MenuItem[], owner?: string) {
   const r = el.getBoundingClientRect();
-  openMenu({ x: r.left, y: r.bottom + 4 }, items);
+  openMenu({ x: r.left, y: r.bottom + 4 }, items, owner);
 }
 
 export function closeMenu(restoreFocus = true) {
   const m = menuState.current;
   menuState.current = null;
+  lastClosed.owner = m?.owner;
+  lastClosed.at = performance.now();
   if (restoreFocus && m?.restore?.isConnected) m.restore.focus({ preventScroll: true });
 }
 

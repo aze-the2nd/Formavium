@@ -6,7 +6,7 @@
       "resources/tex-cache/": "tex-cache/"
     },
     "windows": {
-      "webviewInstallMode": { "type": "offlineInstaller" },
+      "webviewInstallMode": { "type": "embedBootstrapper" },
       "nsis": {
         "installMode": "currentUser",
         "languages": ["German", "English"],

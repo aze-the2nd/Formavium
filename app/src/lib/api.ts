@@ -203,3 +203,9 @@ export function diff(a: string, b: string): { from: number; to: number; insert: 
   }
   return { from: start, to: endA, insert: b.slice(start, endB) };
 }
+
+/** Befehl der Desktop-Hülle außerhalb der Dokumentsitzung (nur in der App). */
+export async function invokeApp<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<T>(command, args);
+}

@@ -55,9 +55,16 @@
   function outside(e: Event) {
     if (menuState.current && !(e.target instanceof Node && el?.contains(e.target))) closeMenu(false);
   }
+
+  /** Tasten gelten dem offenen Menü, auch wenn der Fokus woanders liegt. */
+  function globalKey(e: KeyboardEvent) {
+    if (menuState.current && !(e.target instanceof Node && el?.contains(e.target))) onKey(e);
+  }
 </script>
 
 <svelte:window
+  onkeydowncapture={globalKey}
+  onfocusincapture={outside}
   onpointerdowncapture={outside}
   onwheelcapture={outside}
   onresize={() => closeMenu(false)}
@@ -90,7 +97,10 @@
           onpointerenter={() => (active = item.disabled ? -1 : i)}
           onclick={() => run(item)}
         >
-          <span>{item.label}</span>
+          <span class="label">
+            {#if item.checked !== undefined}<span class="check" aria-hidden="true">{item.checked ? '✓' : ''}</span>{/if}
+            {item.label}
+          </span>
           {#if item.hint}<kbd>{item.hint}</kbd>{/if}
         </button>
       {/if}
@@ -141,6 +151,16 @@
   button:disabled {
     color: var(--muted);
     opacity: 0.55;
+  }
+  .label {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+  }
+  .check {
+    flex: none;
+    width: 18px;
+    color: var(--accent-strong);
   }
   kbd {
     font: inherit;

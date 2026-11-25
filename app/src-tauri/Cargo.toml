@@ -17,6 +17,14 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde.workspace = true
 serde_json.workspace = true
 formavium-session = { path = "../../crates/formavium-session" }
 formavium-render = { path = "../../crates/formavium-render" }
+
+# Zugriffstoken für Feedback in der Windows-Anmeldeinformationsverwaltung.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }

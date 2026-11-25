@@ -1,0 +1,66 @@
+# Baut bei einem Versions-Tag (v1.2.3) die Windows-Installer und
+# veröffentlicht sie als Release. Die installierte App findet das Release
+# über latest.json und aktualisiert sich selbst.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows-Installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version und Signaturschlüssel prüfen
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          if [ "$tag" != "$conf" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zur Version $conf in tauri.conf.json. Bitte scripts/release.sh verwenden."
+            exit 1
+          fi
+          if [ -z "$KEY" ]; then
+            echo "::error::Das Repository-Secret TAURI_SIGNING_PRIVATE_KEY fehlt. Ohne Signatur gibt es kein Auto-Update."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build-Umgebung
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/dev.Dockerfile
+          tags: formavium-dev
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tests
+        run: docker run --rm -v "$PWD:/work" -w /work formavium-dev cargo test --workspace
+
+      - name: Installer bauen
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          docker run --rm \
+            -e TAURI_SIGNING_PRIVATE_KEY -e TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            -v "$PWD:/work" -w /work formavium-dev sh scripts/build-windows.sh
+
+      - name: Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/windows/* \
+            --title "Formavium ${GITHUB_REF_NAME#v}" \
+            --generate-notes
