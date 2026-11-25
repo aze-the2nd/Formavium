@@ -130,7 +130,7 @@ fn structure_edit_requires_conversion_and_keeps_text() {
     let module = ids(&p)[1].clone();
     let mut ws = Workspace::new(p);
     let g = generate(ws.project());
-    let c = change_at(&g, "\\toprule", 0, "\\hline");
+    let c = change_at(&g, "\\hline", 0, "\\hline\\hline");
     assert_eq!(
         apply(&mut ws, &c, false),
         Err(format!("convert {:?}", vec![module.clone()]))
@@ -155,7 +155,7 @@ fn generated_frame_is_not_editable() {
     let g = generate(ws.project());
     let c = change_at(&g, "\\begin{document}", 0, "\\begin{dokument}");
     assert!(apply(&mut ws, &c, true).unwrap_err().contains("erzeugt"));
-    let c = change_at(&g, "\\usepackage{booktabs}", 0, "");
+    let c = change_at(&g, "\\usepackage{graphicx}", 0, "");
     assert!(apply(&mut ws, &c, true).is_err());
 }
 

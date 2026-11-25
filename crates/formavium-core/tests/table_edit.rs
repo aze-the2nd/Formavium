@@ -69,7 +69,7 @@ fn cell_and_row_commands_work_on_ids() {
     let ids: Vec<Id> = rows(&ws, &first).into_iter().map(|r| r.id).collect();
     assert_eq!(ids, [Id::from("r2"), Id::from("r1")]);
     let text = generate(ws.project()).text;
-    assert!(text.contains("Winkel\\_A & 8~Stk. & 12,5 \\\\\nSchraube M4"));
+    assert!(text.contains("Winkel\\_A & 8~Stk. & 12,5 \\\\\n\\hline\nSchraube M4"));
 }
 
 #[test]
@@ -160,10 +160,10 @@ fn local_column_exists_only_in_one_instance() {
         "{text}"
     );
     assert!(text.contains("Schraube M4 & DIN 912 & 12~Stk. & 20 \\\\"));
-    assert!(text.contains("\\begin{tabular}{llrr}"));
+    assert!(text.contains("\\begin{tabular}{|l|l|r|r|}"));
     // Zweite Instanz und Moduldefinition bleiben unverändert.
     assert!(text.contains("Bezeichnung & Menge & Länge [mm] \\\\"));
-    assert!(text.contains("\\begin{tabular}{lrr}"));
+    assert!(text.contains("\\begin{tabular}{|l|r|r|}"));
     let def = &ws.project().modules[0];
     assert_eq!(def, &formavium_core::sample::materialliste());
 

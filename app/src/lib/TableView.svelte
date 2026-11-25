@@ -428,14 +428,16 @@
     border-collapse: collapse;
     width: 100%;
     font-size: 13px;
-    border-top: 2px solid var(--text);
-    border-bottom: 2px solid var(--text);
+  }
+  /* Regelmäßiges Gitter um jede Zelle, wie im gesetzten Dokument. */
+  th,
+  td {
+    border: 1px solid var(--text-2);
   }
   th {
     position: relative;
     font-weight: 600;
     padding: 6px 8px;
-    border-bottom: 1px solid var(--text);
     cursor: grab;
     user-select: none;
     white-space: nowrap;
@@ -455,7 +457,7 @@
   /* Griff nur beim Überfahren oder mit Fokus. */
   .grip {
     position: absolute;
-    left: -2px;
+    left: 1px;
     top: 50%;
     transform: translateY(-50%);
     color: var(--muted);

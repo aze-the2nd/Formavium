@@ -366,20 +366,16 @@ pub fn generate(project: &Project) -> Generated {
 
 fn required_packages(project: &Project) -> Vec<&'static str> {
     let mut graphicx = false;
-    let mut booktabs = false;
     for def in &project.modules {
-        visit(&def.body, &mut |k| match k {
-            ElementKind::Image { .. } => graphicx = true,
-            ElementKind::Table { .. } => booktabs = true,
-            _ => {}
+        visit(&def.body, &mut |k| {
+            if let ElementKind::Image { .. } = k {
+                graphicx = true;
+            }
         });
     }
     let mut v = Vec::new();
     if graphicx {
         v.push("graphicx");
-    }
-    if booktabs {
-        v.push("booktabs");
     }
     v
 }
@@ -614,15 +610,17 @@ fn emit_table(
         emit_text(w, ctx, caption, false);
         w.push("}\\par\\smallskip\n");
     }
-    let spec: String = cols
-        .iter()
-        .map(|c| match c.align {
+    // Standard ist ein regelmäßiges Gitter: Linien um jede Zelle.
+    let mut spec = String::from("|");
+    for c in &cols {
+        spec.push(match c.align {
             Align::Left => 'l',
             Align::Center => 'c',
             Align::Right => 'r',
-        })
-        .collect();
-    let _ = writeln!(w.out.text, "\\begin{{tabular}}{{{spec}}}\n\\toprule");
+        });
+        spec.push('|');
+    }
+    let _ = writeln!(w.out.text, "\\begin{{tabular}}{{{spec}}}\n\\hline");
     for (i, c) in cols.iter().enumerate() {
         if i > 0 {
             w.push(" & ");
@@ -632,7 +630,7 @@ fn emit_table(
             let _ = write!(w.out.text, " [{}]", escape_text(unit));
         }
     }
-    w.push(" \\\\\n\\midrule\n");
+    w.push(" \\\\\n\\hline\n");
     w.spanned(ctx.field_origin(rows), |w| {
         for row in &data {
             for (i, c) in cols.iter().enumerate() {
@@ -653,7 +651,7 @@ fn emit_table(
                     }
                 }
             }
-            w.push(" \\\\\n");
+            w.push(" \\\\\n\\hline\n");
         }
     });
     if data.is_empty() && ctx.inst.required {
@@ -662,7 +660,7 @@ fn emit_table(
             format!("Tabelle „{rows_path}“ ist leer"),
         );
     }
-    w.push("\\bottomrule\n\\end{tabular}\n\\end{center}\n");
+    w.push("\\end{tabular}\n\\end{center}\n");
 }
 
 #[cfg(test)]

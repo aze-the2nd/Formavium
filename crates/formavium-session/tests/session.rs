@@ -76,8 +76,8 @@ fn full_session_flow() {
     // Strukturänderung verlangt Bestätigung.
     let src = r["doc"]["source"].as_str().unwrap();
     let rev = r["doc"]["revision"].as_u64().unwrap();
-    let at = utf16_index(src, "\\toprule");
-    let args = json!({ "base": rev, "from": at, "to": at + 8, "insert": "\\hline" });
+    let at = utf16_index(src, "\\hline");
+    let args = json!({ "base": rev, "from": at, "to": at + 6, "insert": "\\hline\\hline" });
     let r = s.call("source_edit", &args).unwrap();
     assert_eq!(r["outcome"], "needs_conversion");
     let mut args = args;

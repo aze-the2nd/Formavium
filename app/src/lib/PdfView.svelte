@@ -60,7 +60,11 @@
   let resizeTimer: ReturnType<typeof setTimeout>;
   let observer: ResizeObserver | undefined;
   onMount(() => {
+    // Nur bei geänderter Breite neu zeichnen, nicht bei Höhenänderungen.
+    let lastWidth = pagesEl.clientWidth;
     observer = new ResizeObserver(() => {
+      if (pagesEl.clientWidth === lastWidth) return;
+      lastWidth = pagesEl.clientWidth;
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(render, 150);
     });
@@ -198,7 +202,12 @@
   }
   .pages {
     flex: 1;
-    overflow: auto;
+    /* Platz für die Bildlaufleiste fest reservieren: Sonst ändert ihr
+       Erscheinen die Breite, die Seite wird neu skaliert, die Leiste
+       verschwindet wieder, und die Ansicht flackert. */
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: 16px;
     display: flex;
     flex-direction: column;
