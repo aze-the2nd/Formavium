@@ -1,0 +1,22 @@
+[package]
+name = "formavium-session"
+description = "Sitzung eines geöffneten Dokuments: gemeinsame API für Desktop-Hülle und Dev-Bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "formavium-devbridge"
+path = "src/bin/devbridge.rs"
+
+[dependencies]
+formavium-core.workspace = true
+formavium-render.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.23"
+
+[dev-dependencies]
+tempfile.workspace = true

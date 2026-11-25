@@ -1,0 +1,24 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+    image: formavium-dev
+    working_dir: /work
+    volumes:
+      - .:/work
+      # Build-Artefakte und Caches in Volumes: schneller als Bind-Mounts unter Windows.
+      - target:/target
+      - cargo-registry:/usr/local/cargo/registry
+      - tectonic-cache:/tectonic-cache
+      # Linux-Module des Frontends nicht in den Windows-Arbeitsordner schreiben.
+      - node-modules:/work/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173" # Vite (Frontend im Browser)
+    command: sleep infinity
+
+volumes:
+  target:
+  cargo-registry:
+  tectonic-cache:
+  node-modules:

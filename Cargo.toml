@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/formavium-core", "crates/formavium-render", "crates/formavium-session", "crates/formavium-cli", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+tempfile = "3"
+formavium-core = { path = "crates/formavium-core" }
+formavium-render = { path = "crates/formavium-render" }

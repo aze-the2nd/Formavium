@@ -1,0 +1,40 @@
+% Testkorpus: mehrseitiges Datenblatt mit Tabellenumbruch, Einheiten,
+% Kopf-/Fußzeilen und Seitenzahl „x von y“.
+\documentclass[a4paper,10pt]{article}
+\usepackage{fontspec}
+\usepackage[ngerman]{babel}
+\usepackage[margin=2cm]{geometry}
+\usepackage{longtable,tabularx,array,booktabs,multirow}
+\usepackage[locale=DE]{siunitx}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{xcolor}
+\usepackage{colortbl}
+% 120 Tabellenzeilen erzwingen Seitenumbrüche in der longtable.
+\newcounter{nr}
+\newcommand\Zeile{\stepcounter{nr}\arabic{nr} & Punkt & \SI{230}{\volt} \\}
+\newcommand\Zehn{\Zeile\Zeile\Zeile\Zeile\Zeile\Zeile\Zeile\Zeile\Zeile\Zeile}
+\pagestyle{fancy}
+\fancyhead[L]{Datenblatt}
+\fancyfoot[C]{Seite \thepage\ von \pageref{LastPage}}
+\begin{document}
+\section*{Messwerte}
+\begin{tabularx}{\linewidth}{lX S[table-format=3.2]}
+\toprule
+Größe & Beschreibung & {Wert [\si{\milli\metre}]} \\
+\midrule
+A & Länge & 12.50 \\
+B & Breite & 7.25 \\
+\bottomrule
+\end{tabularx}
+
+\begin{longtable}{r l r}
+\toprule
+Nr. & Messpunkt & Spannung \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn\Zehn
+\end{longtable}
+\end{document}

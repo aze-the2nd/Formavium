@@ -1,0 +1,725 @@
+//! Erzeugung des reinen LaTeX-Quelltexts mit Positionszuordnung.
+//!
+//! Der erzeugte Text enthält keine Formavium-Metadaten. Die Zuordnung von
+//! Bytebereichen zu Dokumentteilen und Feldern wird getrennt geliefert.
+
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+
+use crate::model::{
+    Align, Column, Element, ElementKind, Id, ModuleInstance, ModuleRef, PartContent, Project, Row,
+    Text, UnitPlacement, Value,
+};
+
+/// Herkunft eines Bereichs im erzeugten Quelltext.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Origin {
+    Preamble,
+    /// Freier LaTeX-Teil des Dokuments.
+    Latex {
+        part: Id,
+    },
+    /// Struktur einer Modulinstanz (vom Modul erzeugt).
+    Module {
+        part: Id,
+        module: ModuleRef,
+    },
+    /// Wert eines Eingabefeldes einer Instanz.
+    Field {
+        part: Id,
+        path: String,
+    },
+    /// Zelle eines Tabellenfeldes.
+    Cell {
+        part: Id,
+        path: String,
+        row: Id,
+        column: Id,
+    },
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Origin::Preamble => write!(f, "Präambel"),
+            Origin::Latex { part } => write!(f, "freier LaTeX-Teil {part}"),
+            Origin::Module { part, module } => write!(f, "Modul {module} in Teil {part}"),
+            Origin::Field { part, path } => write!(f, "Feld „{path}“ in Teil {part}"),
+            Origin::Cell {
+                part,
+                path,
+                row,
+                column,
+            } => {
+                write!(
+                    f,
+                    "Tabelle „{path}“, Zeile {row}, Spalte {column} in Teil {part}"
+                )
+            }
+        }
+    }
+}
+
+impl Origin {
+    /// Dokumentteil, zu dem der Bereich gehört.
+    pub fn part(&self) -> Option<&Id> {
+        match self {
+            Origin::Preamble => None,
+            Origin::Latex { part }
+            | Origin::Module { part, .. }
+            | Origin::Field { part, .. }
+            | Origin::Cell { part, .. } => Some(part),
+        }
+    }
+}
+
+/// Gesamter Textbereich eines Dokumentteils einschließlich Zeilenumbrüchen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartRange {
+    pub part: Id,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Span {
+    /// Bytebereich im UTF-8-Text.
+    pub start: usize,
+    pub end: usize,
+    pub origin: Origin,
+}
+
+/// Hinweise, die beim Erzeugen auffallen (z. B. fehlende Pflichtangaben).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub origin: Origin,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Generated {
+    pub text: String,
+    pub spans: Vec<Span>,
+    pub notices: Vec<Notice>,
+    /// Relative Pfade aller referenzierten Bilddateien.
+    pub resources: BTreeSet<String>,
+    /// Bereiche der Dokumentteile in Dokumentreihenfolge.
+    pub part_ranges: Vec<PartRange>,
+}
+
+impl Generated {
+    /// Innerste Herkunft an einer Byteposition.
+    pub fn origin_at(&self, offset: usize) -> Option<&Origin> {
+        self.spans
+            .iter()
+            .filter(|s| s.start <= offset && offset < s.end)
+            .min_by_key(|s| s.end - s.start)
+            .map(|s| &s.origin)
+    }
+
+    /// Herkunft einer (1-basierten) Zeile, wie sie TeX-Diagnosen melden.
+    pub fn origin_at_line(&self, line: u32) -> Option<&Origin> {
+        let start = line_start(&self.text, line)?;
+        let end = self.text[start..]
+            .find('\n')
+            .map_or(self.text.len(), |i| start + i);
+        // Erste nicht leere Stelle der Zeile bevorzugen.
+        let pos = self.text[start..end]
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace())
+            .map_or(start, |(i, _)| start + i);
+        self.origin_at(pos)
+    }
+
+    /// 1-basierte Zeile einer Byteposition.
+    pub fn line_of(&self, offset: usize) -> u32 {
+        let offset = offset.min(self.text.len());
+        self.text.as_bytes()[..offset]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count() as u32
+            + 1
+    }
+
+    /// Bereich eines Dokumentteils.
+    pub fn part_range(&self, part: &Id) -> Option<&PartRange> {
+        self.part_ranges.iter().find(|r| &r.part == part)
+    }
+}
+
+fn line_start(text: &str, line: u32) -> Option<usize> {
+    if line == 0 {
+        return None;
+    }
+    if line == 1 {
+        return Some(0);
+    }
+    text.match_indices('\n')
+        .nth(line as usize - 2)
+        .map(|(i, _)| i + 1)
+}
+
+/// Maskiert Inhalte für den Textkontext von LaTeX.
+///
+/// Eingegebene Werte sind Inhalt und nie Quelltext (Sicherheitsanforderung
+/// „Datenfelder und freies LaTeX“).
+pub fn escape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\textbackslash{}"),
+            '{' => out.push_str("\\{"),
+            '}' => out.push_str("\\}"),
+            '$' => out.push_str("\\$"),
+            '&' => out.push_str("\\&"),
+            '#' => out.push_str("\\#"),
+            '%' => out.push_str("\\%"),
+            '_' => out.push_str("\\_"),
+            '^' => out.push_str("\\textasciicircum{}"),
+            '~' => out.push_str("\\textasciitilde{}"),
+            '\r' => {}
+            '\n' | '\t' => out.push(' '),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Umkehrung von [`escape_text`] für im Quelltext bearbeitete Feldwerte.
+///
+/// Bekannte Maskierungen werden zurückgeführt. Alles andere, auch ein
+/// unmaskiertes Sonderzeichen, gilt als eingegebener Inhalt.
+pub fn unescape_text(s: &str) -> String {
+    const SEQ: [(&str, char); 10] = [
+        ("\\textbackslash{}", '\\'),
+        ("\\textasciicircum{}", '^'),
+        ("\\textasciitilde{}", '~'),
+        ("\\{", '{'),
+        ("\\}", '}'),
+        ("\\$", '$'),
+        ("\\&", '&'),
+        ("\\#", '#'),
+        ("\\%", '%'),
+        ("\\_", '_'),
+    ];
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    'outer: while let Some(c) = rest.chars().next() {
+        if c == '\\' {
+            for (seq, ch) in SEQ {
+                if let Some(r) = rest.strip_prefix(seq) {
+                    out.push(ch);
+                    rest = r;
+                    continue 'outer;
+                }
+            }
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+/// Wandelt eine UTF-16-Position (Editor) in eine UTF-8-Byteposition (Kern).
+/// `None`, wenn die Position außerhalb liegt oder ein Ersatzpaar teilt.
+pub fn utf16_to_byte(s: &str, utf16: usize) -> Option<usize> {
+    let mut units = 0;
+    for (i, c) in s.char_indices() {
+        if units == utf16 {
+            return Some(i);
+        }
+        units += c.len_utf16();
+        if units > utf16 {
+            return None;
+        }
+    }
+    (units == utf16).then_some(s.len())
+}
+
+/// Wandelt eine UTF-8-Byteposition in eine UTF-16-Position.
+pub fn byte_to_utf16(s: &str, byte: usize) -> usize {
+    s[..byte.min(s.len())].chars().map(char::len_utf16).sum()
+}
+
+/// Maskiert einen Absatztext; Leerzeilen bleiben Absatzwechsel.
+fn escape_paragraphs(s: &str) -> String {
+    let normalized = s.replace("\r\n", "\n");
+    normalized
+        .split("\n\n")
+        .map(|p| escape_text(p.trim()))
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Ein Bildpfad ist zulässig, wenn er relativ ist, im Projekt bleibt und nur
+/// Zeichen enthält, die in `\includegraphics` keine Maskierung brauchen.
+pub fn is_safe_resource_path(p: &str) -> bool {
+    !p.is_empty()
+        && !p.starts_with('/')
+        && !p.contains('\\')
+        && !p.contains(':')
+        && p.split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+        && p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+}
+
+struct Writer<'p> {
+    project: &'p Project,
+    out: Generated,
+}
+
+impl<'p> Writer<'p> {
+    fn push(&mut self, s: &str) {
+        self.out.text.push_str(s);
+    }
+
+    fn spanned(&mut self, origin: Origin, f: impl FnOnce(&mut Self)) {
+        let start = self.out.text.len();
+        f(self);
+        let end = self.out.text.len();
+        // Leere Bereiche bleiben erhalten: In ein leeres Feld kann man tippen.
+        self.out.spans.push(Span { start, end, origin });
+    }
+
+    fn notice(&mut self, origin: Origin, message: impl Into<String>) {
+        self.out.notices.push(Notice {
+            origin,
+            message: message.into(),
+        });
+    }
+}
+
+/// Erzeugt das vollständige `main.tex` eines Projekts.
+pub fn generate(project: &Project) -> Generated {
+    let mut w = Writer {
+        project,
+        out: Generated::default(),
+    };
+
+    w.spanned(Origin::Preamble, |w| {
+        w.push(project.preamble.trim_end());
+        w.push("\n");
+    });
+    let packages = required_packages(project);
+    for pkg in packages {
+        if !project.preamble.contains(pkg) {
+            let _ = writeln!(w.out.text, "\\usepackage{{{pkg}}}");
+        }
+    }
+    w.push("\\begin{document}\n");
+
+    for part in &project.parts {
+        let part_start = w.out.text.len();
+        match &part.content {
+            PartContent::Latex { source } => {
+                w.spanned(
+                    Origin::Latex {
+                        part: part.id.clone(),
+                    },
+                    |w| {
+                        // Freier Quelltext bleibt exakt erhalten, nur ein
+                        // abschließender Zeilenumbruch wird bei Bedarf ergänzt.
+                        w.push(source);
+                        if !source.ends_with('\n') {
+                            w.push("\n");
+                        }
+                    },
+                );
+            }
+            PartContent::Module(inst) => {
+                let origin = Origin::Module {
+                    part: part.id.clone(),
+                    module: inst.module.clone(),
+                };
+                w.spanned(origin.clone(), |w| match project.module(&inst.module) {
+                    Some(def) => {
+                        let ctx = Ctx {
+                            part: &part.id,
+                            inst,
+                            scope: String::new(),
+                        };
+                        emit_body(w, &ctx, &def.body);
+                    }
+                    None => {
+                        w.notice(
+                            origin.clone(),
+                            format!("Moduldefinition {} fehlt im Dokument", inst.module),
+                        );
+                        w.push("% Modul nicht verfügbar\n");
+                    }
+                });
+                w.push("\n");
+            }
+        }
+        w.out.part_ranges.push(PartRange {
+            part: part.id.clone(),
+            start: part_start,
+            end: w.out.text.len(),
+        });
+    }
+    w.push("\\end{document}\n");
+    w.out
+}
+
+fn required_packages(project: &Project) -> Vec<&'static str> {
+    let mut graphicx = false;
+    let mut booktabs = false;
+    for def in &project.modules {
+        visit(&def.body, &mut |k| match k {
+            ElementKind::Image { .. } => graphicx = true,
+            ElementKind::Table { .. } => booktabs = true,
+            _ => {}
+        });
+    }
+    let mut v = Vec::new();
+    if graphicx {
+        v.push("graphicx");
+    }
+    if booktabs {
+        v.push("booktabs");
+    }
+    v
+}
+
+fn visit(body: &[Element], f: &mut impl FnMut(&ElementKind)) {
+    for el in body {
+        f(&el.kind);
+        if let ElementKind::Row { children } = &el.kind {
+            visit(children, f);
+        }
+    }
+}
+
+struct Ctx<'a> {
+    part: &'a Id,
+    inst: &'a ModuleInstance,
+    /// Pfadpräfix für verschachtelte Module, leer oder mit `/` endend.
+    scope: String,
+}
+
+impl Ctx<'_> {
+    fn path(&self, id: &Id) -> String {
+        format!("{}{}", self.scope, id)
+    }
+    fn field_origin(&self, id: &Id) -> Origin {
+        Origin::Field {
+            part: self.part.clone(),
+            path: self.path(id),
+        }
+    }
+}
+
+const MAX_DEPTH: usize = 16;
+
+fn emit_body(w: &mut Writer, ctx: &Ctx, body: &[Element]) {
+    for el in body {
+        emit_element(w, ctx, el);
+    }
+}
+
+fn emit_text(w: &mut Writer, ctx: &Ctx, text: &Text, paragraphs: bool) {
+    match text {
+        Text::Literal(s) => {
+            let escaped = if paragraphs {
+                escape_paragraphs(s)
+            } else {
+                escape_text(s)
+            };
+            w.push(&escaped);
+        }
+        Text::Field(id) => {
+            let path = ctx.path(id);
+            let value = match w.project.effective_value(ctx.inst, &path) {
+                Some(Value::Text(s)) | Some(Value::Number(s)) => s.clone(),
+                _ => String::new(),
+            };
+            if value.trim().is_empty() && ctx.inst.required {
+                w.notice(
+                    ctx.field_origin(id),
+                    format!("Pflichtangabe „{path}“ ist leer"),
+                );
+            }
+            let escaped = if paragraphs {
+                escape_paragraphs(&value)
+            } else {
+                escape_text(&value)
+            };
+            w.spanned(ctx.field_origin(id), |w| w.push(&escaped));
+        }
+    }
+}
+
+fn emit_element(w: &mut Writer, ctx: &Ctx, el: &Element) {
+    match &el.kind {
+        ElementKind::Heading { level, text } => {
+            let cmd = match level {
+                0 | 1 => "section",
+                2 => "subsection",
+                _ => "subsubsection",
+            };
+            let _ = write!(w.out.text, "\\{cmd}{{");
+            emit_text(w, ctx, text, false);
+            w.push("}\n");
+        }
+        ElementKind::Paragraph { text } => {
+            emit_text(w, ctx, text, true);
+            w.push("\n\n");
+        }
+        ElementKind::Table {
+            columns,
+            rows,
+            caption,
+        } => emit_table(w, ctx, el, columns, rows, caption.as_ref()),
+        ElementKind::Image { path, width } => {
+            let field_path = ctx.path(path);
+            let value = match w.project.effective_value(ctx.inst, &field_path) {
+                Some(Value::Image(p)) => Some(p.clone()),
+                _ => None,
+            };
+            let width = width.clamp(0.05, 1.0);
+            w.spanned(ctx.field_origin(path), |w| match value {
+                Some(p) if is_safe_resource_path(&p) => {
+                    let _ = write!(
+                        w.out.text,
+                        "\\includegraphics[width={width:.3}\\linewidth]{{{p}}}"
+                    );
+                    w.out.resources.insert(p);
+                }
+                Some(p) => {
+                    w.notice(
+                        ctx.field_origin(path),
+                        format!("Bildpfad „{p}“ ist nicht zulässig"),
+                    );
+                    placeholder(w, width, "Bildpfad unzulässig");
+                }
+                None => {
+                    if ctx.inst.required {
+                        w.notice(
+                            ctx.field_origin(path),
+                            format!("Pflichtbild „{field_path}“ fehlt"),
+                        );
+                    }
+                    placeholder(w, width, "Bild");
+                }
+            });
+            w.push("\n");
+        }
+        ElementKind::Row { children } => {
+            let n = children.len().max(1) as f32;
+            let width = (0.98 / n) - 0.02 * (n - 1.0) / n;
+            w.push("\\par\\noindent\n");
+            for (i, child) in children.iter().enumerate() {
+                if i > 0 {
+                    w.push("\\hfill\n");
+                }
+                let _ = writeln!(
+                    w.out.text,
+                    "\\begin{{minipage}}[t]{{{width:.3}\\linewidth}}\\vspace{{0pt}}"
+                );
+                emit_element(w, ctx, child);
+                w.push("\\end{minipage}\n");
+            }
+            w.push("\\par\n");
+        }
+        ElementKind::Module { module } => {
+            let depth = ctx.scope.matches('/').count();
+            match w.project.module(module) {
+                Some(def) if depth < MAX_DEPTH => {
+                    let sub = Ctx {
+                        part: ctx.part,
+                        inst: ctx.inst,
+                        scope: format!("{}{}/", ctx.scope, el.id),
+                    };
+                    emit_body(w, &sub, &def.body);
+                }
+                Some(_) => {
+                    let o = Origin::Module {
+                        part: ctx.part.clone(),
+                        module: module.clone(),
+                    };
+                    w.notice(o, "Modulverschachtelung zu tief oder zyklisch");
+                }
+                None => {
+                    let o = Origin::Module {
+                        part: ctx.part.clone(),
+                        module: module.clone(),
+                    };
+                    w.notice(o, format!("Untermodul {module} fehlt im Dokument"));
+                }
+            }
+        }
+        ElementKind::Latex { source } => {
+            w.push(source.trim_end_matches(['\n', '\r']));
+            w.push("\n");
+        }
+    }
+}
+
+fn placeholder(w: &mut Writer, width: f32, label: &str) {
+    let _ = write!(
+        w.out.text,
+        "\\fbox{{\\parbox[c][0.4\\linewidth][c]{{\\dimexpr{width:.3}\\linewidth-2\\fboxsep-2\\fboxrule\\relax}}{{\\centering {}}}}}",
+        escape_text(label)
+    );
+}
+
+/// Effektive Spalten einer Tabelle in einer Instanz: lokal angepasste
+/// Spalten ersetzen die der Definition, darauf wirkt die lokale Reihenfolge.
+pub fn ordered_columns<'c>(
+    inst: &'c ModuleInstance,
+    table_path: &str,
+    columns: &'c [Column],
+) -> Vec<&'c Column> {
+    let columns = inst.columns.get(table_path).map_or(columns, Vec::as_slice);
+    match inst.column_order.get(table_path) {
+        Some(order) => {
+            let mut v: Vec<&Column> = order
+                .iter()
+                .filter_map(|id| columns.iter().find(|c| &c.id == id))
+                .collect();
+            // Später in der Definition ergänzte Spalten erscheinen am Ende.
+            for c in columns {
+                if !order.contains(&c.id) {
+                    v.push(c);
+                }
+            }
+            v
+        }
+        None => columns.iter().collect(),
+    }
+}
+
+fn emit_table(
+    w: &mut Writer,
+    ctx: &Ctx,
+    el: &Element,
+    columns: &[Column],
+    rows: &Id,
+    caption: Option<&Text>,
+) {
+    let table_path = ctx.path(&el.id);
+    let cols = ordered_columns(ctx.inst, &table_path, columns);
+    let rows_path = ctx.path(rows);
+    let data: Vec<Row> = match w.project.effective_value(ctx.inst, &rows_path) {
+        Some(Value::Table(r)) => r.clone(),
+        _ => Vec::new(),
+    };
+
+    w.push("\\begin{center}\n");
+    if let Some(caption) = caption {
+        w.push("\\textbf{");
+        emit_text(w, ctx, caption, false);
+        w.push("}\\par\\smallskip\n");
+    }
+    let spec: String = cols
+        .iter()
+        .map(|c| match c.align {
+            Align::Left => 'l',
+            Align::Center => 'c',
+            Align::Right => 'r',
+        })
+        .collect();
+    let _ = writeln!(w.out.text, "\\begin{{tabular}}{{{spec}}}\n\\toprule");
+    for (i, c) in cols.iter().enumerate() {
+        if i > 0 {
+            w.push(" & ");
+        }
+        emit_text(w, ctx, &c.header, false);
+        if let (Some(unit), UnitPlacement::Header) = (&c.unit, c.unit_placement) {
+            let _ = write!(w.out.text, " [{}]", escape_text(unit));
+        }
+    }
+    w.push(" \\\\\n\\midrule\n");
+    w.spanned(ctx.field_origin(rows), |w| {
+        for row in &data {
+            for (i, c) in cols.iter().enumerate() {
+                if i > 0 {
+                    w.push(" & ");
+                }
+                let cell = row.cells.get(&c.id).map(String::as_str).unwrap_or("");
+                let origin = Origin::Cell {
+                    part: ctx.part.clone(),
+                    path: rows_path.clone(),
+                    row: row.id.clone(),
+                    column: c.id.clone(),
+                };
+                w.spanned(origin, |w| w.push(&escape_text(cell)));
+                if let (Some(unit), UnitPlacement::Value) = (&c.unit, c.unit_placement) {
+                    if !cell.trim().is_empty() {
+                        let _ = write!(w.out.text, "~{}", escape_text(unit));
+                    }
+                }
+            }
+            w.push(" \\\\\n");
+        }
+    });
+    if data.is_empty() && ctx.inst.required {
+        w.notice(
+            ctx.field_origin(rows),
+            format!("Tabelle „{rows_path}“ ist leer"),
+        );
+    }
+    w.push("\\bottomrule\n\\end{tabular}\n\\end{center}\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escapes_special_characters() {
+        assert_eq!(
+            escape_text("A & B 50% $x_1#^~\\{}"),
+            "A \\& B 50\\% \\$x\\_1\\#\\textasciicircum{}\\textasciitilde{}\\textbackslash{}\\{\\}"
+        );
+    }
+
+    #[test]
+    fn keeps_unicode() {
+        assert_eq!(escape_text("Größe µm – Ø"), "Größe µm – Ø");
+    }
+
+    #[test]
+    fn resource_paths() {
+        assert!(is_safe_resource_path("bilder/foto-1.png"));
+        assert!(!is_safe_resource_path("../geheim.png"));
+        assert!(!is_safe_resource_path("/etc/passwd"));
+        assert!(!is_safe_resource_path("C:/x.png"));
+        assert!(!is_safe_resource_path("a b.png"));
+        assert!(!is_safe_resource_path("x}\\input{y.png"));
+    }
+
+    #[test]
+    fn unescape_roundtrip() {
+        for s in ["A & B 50% $x_1#^~\\{}", "Größe µm", "a\\b", ""] {
+            assert_eq!(unescape_text(&escape_text(s)), s);
+        }
+        assert_eq!(unescape_text("roh & offen"), "roh & offen");
+        assert_eq!(unescape_text("\\emph{x}"), "\\emph{x}");
+    }
+
+    #[test]
+    fn utf16_conversion() {
+        let s = "aä😀b";
+        assert_eq!(utf16_to_byte(s, 0), Some(0));
+        assert_eq!(utf16_to_byte(s, 1), Some(1));
+        assert_eq!(utf16_to_byte(s, 2), Some(3));
+        assert_eq!(utf16_to_byte(s, 3), None);
+        assert_eq!(utf16_to_byte(s, 4), Some(7));
+        assert_eq!(utf16_to_byte(s, 5), Some(8));
+        assert_eq!(utf16_to_byte(s, 6), None);
+        for b in [0, 1, 3, 7, 8] {
+            assert_eq!(utf16_to_byte(s, byte_to_utf16(s, b)), Some(b));
+        }
+    }
+
+    #[test]
+    fn line_lookup() {
+        assert_eq!(line_start("a\nb\nc", 1), Some(0));
+        assert_eq!(line_start("a\nb\nc", 3), Some(4));
+        assert_eq!(line_start("a\nb\nc", 4), None);
+    }
+}

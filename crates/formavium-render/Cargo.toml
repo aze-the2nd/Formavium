@@ -1,0 +1,16 @@
+[package]
+name = "formavium-render"
+description = "Rendersteuerung: Tectonic im eigenen Prozess, jüngste Revision gewinnt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+formavium-core.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]

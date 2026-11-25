@@ -1,0 +1,18 @@
+% Testkorpus: Firmenbericht mit KOMA-Klasse und TeX-Gyre-Schriften.
+\documentclass[a4paper,11pt,parskip=half]{scrreprt}
+\usepackage{fontspec}
+% Tectonic findet Bundle-Schriften über den Dateinamen, nicht über den
+% Systemnamen („TeX Gyre Pagella“ schlägt fehl).
+\setmainfont{texgyrepagella}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold,
+  ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+\setsansfont{texgyreheros}[Extension=.otf, UprightFont=*-regular, BoldFont=*-bold,
+  ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+\usepackage[ngerman]{babel}
+\usepackage{scrlayer-scrpage}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\begin{document}
+\chapter{Prüfbericht}
+\section{Befund}
+Text in Pagella. \textsf{Überschrift in Heros.} \textbf{Fett}, \textit{kursiv}.
+\end{document}

@@ -1,0 +1,22 @@
+[package]
+name = "formavium-app"
+description = "Formavium Desktop-Hülle (Tauri 2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "formavium_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde_json.workspace = true
+formavium-session = { path = "../../crates/formavium-session" }
+formavium-render = { path = "../../crates/formavium-render" }

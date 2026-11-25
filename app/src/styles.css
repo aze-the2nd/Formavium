@@ -1,0 +1,111 @@
+:root {
+  --brand: #1f3a5f;
+  --accent: #2f6fdf;
+  --accent-strong: #1d4fae;
+  --accent-soft: rgba(47, 111, 223, 0.1);
+  --text: #18202b;
+  --text-2: #3c4655;
+  --muted: #6b7686;
+  --panel: #ffffff;
+  --panel-2: #f4f6f9;
+  --pdf-bg: #e9ecf1;
+  --line: #e1e5eb;
+  --line-strong: #c5ccd6;
+  --ok: #1f9d55;
+  --warn: #b26a00;
+  --warn-soft: #fff4e0;
+  --danger: #c93838;
+  --danger-soft: #fdecec;
+  --mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  --ui: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --field-hover: rgba(24, 32, 43, 0.045);
+  --hl-command: #1d4fae;
+  --hl-bracket: #7a5c00;
+  --hl-comment: #7a8594;
+  --hl-math: #a1338c;
+  --hl-number: #0b7a62;
+  --hl-env: #b0450c;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand: #3b6aa8;
+    --accent: #6c9cff;
+    --accent-strong: #9dbcff;
+    --accent-soft: rgba(108, 156, 255, 0.14);
+    --text: #e6e9ef;
+    --text-2: #c3c9d3;
+    --muted: #8b95a5;
+    --panel: #1b1f26;
+    --panel-2: #14171c;
+    --pdf-bg: #0f1216;
+    --line: #2b313b;
+    --line-strong: #3c4452;
+    --warn: #f0a640;
+    --warn-soft: rgba(240, 166, 64, 0.12);
+    --danger: #ff6b6b;
+    --danger-soft: rgba(255, 107, 107, 0.12);
+    --field-hover: rgba(230, 233, 239, 0.06);
+    --hl-command: #82aaff;
+    --hl-bracket: #e5c07b;
+    --hl-comment: #7f8899;
+    --hl-math: #e290d4;
+    --hl-number: #7fd6b8;
+    --hl-env: #f5a97f;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 14px;
+}
+
+button.primary,
+button.ghost {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+button.primary.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+button.ghost:hover {
+  background: var(--panel-2);
+}
+
+button.small {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

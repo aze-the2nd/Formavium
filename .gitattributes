@@ -1,0 +1,6 @@
+# Einheitliche Zeilenenden: Die Skripte laufen im Linux-Container.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+*.pdf binary

@@ -1,0 +1,33 @@
+% Testkorpus: kurze Anleitung mit Bild, Querverweis, Formeln und Listen.
+\documentclass[a4paper,11pt]{article}
+\usepackage{fontspec}
+\usepackage[ngerman]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{csquotes}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{hyperref}
+\begin{document}
+\tableofcontents
+\section{Montage}\label{sec:montage}
+Siehe Abbildung~\ref{fig:bild} und Abschnitt~\ref{sec:montage}. \enquote{Zitat} mit Umlauten äöü ß.
+\begin{figure}[H]
+  \centering
+  \rule{4cm}{2cm}
+  \caption{Platzhalter}\label{fig:bild}
+\end{figure}
+\begin{enumerate}[label=\arabic*.]
+  \item Schritt $F = m \cdot a$
+  \item \textcolor{blue}{Hinweis} mit $\sum_{i=1}^n i = \frac{n(n+1)}{2}$
+\end{enumerate}
+\begin{align}
+  E &= mc^2 \\
+  \mathbb{R} &\ni x
+\end{align}
+\end{document}

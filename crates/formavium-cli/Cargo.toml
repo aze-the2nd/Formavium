@@ -1,0 +1,16 @@
+[package]
+name = "formavium-cli"
+description = "Kommandozeile für Rendern, Export und Bearbeitung von .fvm-Dateien"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "formavium"
+path = "src/main.rs"
+
+[dependencies]
+formavium-core.workspace = true
+formavium-render.workspace = true

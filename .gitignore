@@ -1,0 +1,18 @@
+/target
+/out
+*.tmp-*
+node_modules/
+/app/dist
+/app/src-tauri/gen
+/app/src-tauri/binaries
+/app/src-tauri/resources
+/dist
+
+# Nicht Teil des öffentlichen Repositories: Planung, Agentendateien, Ablage
+/Formavium_Planungsstand.md
+/library.htm
+/*.htm
+/*.html
+.claude/
+CLAUDE.md
+AGENTS.md
