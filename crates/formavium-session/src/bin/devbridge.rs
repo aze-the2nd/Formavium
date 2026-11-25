@@ -19,7 +19,11 @@ fn main() {
     let addr = std::env::var("FORMAVIUM_BRIDGE_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let listener = TcpListener::bind(&addr).unwrap_or_else(|e| panic!("{addr}: {e}"));
     eprintln!("formavium-devbridge hört auf http://{addr}");
-    let session = Arc::new(Mutex::new(Session::default()));
+    let mut session = Session::default();
+    // Eigene Bibliothek für die Entwicklung, abseits der Projektdateien.
+    let library = std::env::var("FORMAVIUM_LIBRARY").unwrap_or_else(|_| "out/bibliothek".into());
+    session.set_library_dir(Some(library.into()));
+    let session = Arc::new(Mutex::new(session));
     for stream in listener.incoming().flatten() {
         let session = Arc::clone(&session);
         std::thread::spawn(move || {

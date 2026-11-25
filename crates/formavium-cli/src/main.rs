@@ -5,14 +5,15 @@ use std::process::ExitCode;
 
 use formavium_core::catalog::{content_kinds, ContentKind};
 use formavium_core::latex::Origin;
-use formavium_core::{
-    export, generate, io, sample, Command, PartContent, Project, Value, Workspace,
-};
+use formavium_core::library::Library;
+use formavium_core::{export, generate, io, Command, PartContent, Project, Value, Workspace};
 use formavium_render::{locate_tectonic, Engine, RenderRequest, Severity, TectonicEngine};
 
 const USAGE: &str = "\
 Verwendung:
-  formavium new <datei.fvm>                       Beispiel „Montageanleitung“ anlegen
+  formavium new <datei.fvm> [vorlage]             Dokument aus einer mitgelieferten Vorlage
+                                                  anlegen (ohne Angabe: montageanleitung)
+  formavium templates                             Mitgelieferte Vorlagen auflisten
   formavium info <datei.fvm>                      Teile, Module und Felder anzeigen
   formavium latex <datei.fvm>                     Erzeugtes main.tex ausgeben
   formavium render <datei.fvm> [-o <pdf>] [--offline]
@@ -39,7 +40,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn run(args: &[String]) -> Result<ExitCode> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        ["new", file] => cmd_new(Path::new(file)),
+        ["new", file] => cmd_new(Path::new(file), "montageanleitung"),
+        ["new", file, template] => cmd_new(Path::new(file), template),
+        ["templates"] => cmd_templates(),
         ["info", file] => cmd_info(Path::new(file)),
         ["latex", file] => {
             let (p, _) = io::load(Path::new(file))?;
@@ -98,15 +101,30 @@ fn project_dir(file: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn cmd_new(file: &Path) -> Result<ExitCode> {
+/// Legt ein Dokument aus einer mitgelieferten Vorlage an.
+fn cmd_new(file: &Path, template: &str) -> Result<ExitCode> {
     if file.exists() {
         return Err(format!("{} existiert bereits", file.display()).into());
     }
-    let image = project_dir(file).join(sample::SAMPLE_IMAGE);
-    std::fs::create_dir_all(image.parent().expect("Bildordner"))?;
-    std::fs::write(&image, include_bytes!("../assets/beispiel.png"))?;
-    io::save(file, &sample::anleitung(), None)?;
-    println!("Angelegt: {} und {}", file.display(), image.display());
+    let entry = Library::new(None)
+        .template(template)
+        .ok_or_else(|| format!("Vorlage „{template}“ gibt es nicht (siehe formavium templates)"))?;
+    entry.instantiate(file, &generate(&entry.project).resources)?;
+    println!(
+        "Angelegt: {} aus Vorlage „{}“",
+        file.display(),
+        entry.project.title
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_templates() -> Result<ExitCode> {
+    for t in Library::new(None).templates() {
+        println!(
+            "{:<18} {}  –  {}",
+            t.id, t.project.title, t.project.description
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 

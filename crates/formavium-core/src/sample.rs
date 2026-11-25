@@ -8,6 +8,8 @@ use crate::model::{
 };
 
 pub const SAMPLE_IMAGE: &str = "bilder/beispiel.png";
+/// Beispielbild für neu angelegte Übungsdokumente.
+pub const SAMPLE_PNG: &[u8] = include_bytes!("../../formavium-cli/assets/beispiel.png");
 
 pub fn materialliste() -> ModuleDef {
     let col = |id: &str, header: &str, unit: Option<&str>, placement, align| Column {
@@ -16,11 +18,13 @@ pub fn materialliste() -> ModuleDef {
         unit: unit.map(Into::into),
         unit_placement: placement,
         align,
+        width: None,
     };
     ModuleDef {
         id: Id::from("materialliste"),
         version: 1,
         name: "Materialliste".into(),
+        description: "Überschrift, Tabelle mit Menge und Länge, daneben ein Bild.".into(),
         fields: vec![
             FieldDef {
                 id: Id::from("titel"),

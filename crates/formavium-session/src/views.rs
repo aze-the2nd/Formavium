@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use formavium_core::catalog::{content_kinds, ContentKind};
-use formavium_core::latex::{byte_to_utf16, ordered_columns};
+use formavium_core::latex::{byte_to_utf16, ordered_columns, segments, Segment};
 use formavium_core::{
-    Align, Element, ElementKind, Generated, ModuleInstance, PartContent, Project, Revision, Text,
-    UnitPlacement, Value, Workspace,
+    Align, Element, ElementKind, Generated, ModuleDef, ModuleInstance, PartContent, Project,
+    Revision, Text, UnitPlacement, Value, Workspace, LIST_COLUMN,
 };
 use formavium_render::{Preview, PreviewStatus, Severity};
 use serde::Serialize;
@@ -59,9 +59,23 @@ pub enum PartView {
         line: u32,
         name: String,
         module: String,
+        module_id: String,
+        version: u32,
+        description: String,
         required: bool,
+        /// Verhältnis zur Bibliothek.
+        status: ModuleStatus,
         body: Vec<ElView>,
     },
+}
+
+/// Stand eines Moduls im Dokument gegenüber der Bibliothek.
+#[derive(Clone, Copy, Debug, Default, Serialize, PartialEq)]
+pub struct ModuleStatus {
+    /// Im Dokument geändert oder nie in der Bibliothek gespeichert.
+    pub local: bool,
+    /// Neuere Version in der Bibliothek.
+    pub newer: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -71,6 +85,24 @@ pub struct ColView {
     pub unit: Option<String>,
     pub unit_placement: UnitPlacement,
     pub align: Align,
+    pub width: Option<f32>,
+}
+
+#[derive(Serialize)]
+pub struct ItemView {
+    pub id: String,
+    pub text: String,
+}
+
+/// Eingabefeld innerhalb eines LaTeX-Elements.
+#[derive(Serialize)]
+pub struct LatexFieldView {
+    pub path: String,
+    pub label: String,
+    /// `text`, `raw` (LaTeX des Anwenders) oder `image`.
+    pub kind: &'static str,
+    pub value: String,
+    pub numeric: bool,
 }
 
 #[derive(Serialize)]
@@ -115,12 +147,25 @@ pub enum ElView {
         name: String,
         children: Vec<ElView>,
     },
+    List {
+        /// Pfad des Tabellenfeldes mit den Punkten.
+        path: String,
+        ordered: bool,
+        items: Vec<ItemView>,
+    },
     Latex {
         source: String,
+        /// Eingabefelder des Quelltexts, jedes einmal.
+        fields: Vec<LatexFieldView>,
     },
 }
 
-pub fn doc_view(path: &Path, ws: &Workspace, g: &Generated) -> DocView {
+pub fn doc_view(
+    path: &Path,
+    ws: &Workspace,
+    g: &Generated,
+    status: &dyn Fn(&ModuleDef) -> ModuleStatus,
+) -> DocView {
     let p = ws.project();
     let parts = p
         .parts
@@ -144,7 +189,11 @@ pub fn doc_view(path: &Path, ws: &Workspace, g: &Generated) -> DocView {
                         line,
                         name: def.map_or_else(|| inst.module.to_string(), |d| d.name.clone()),
                         module: inst.module.to_string(),
+                        module_id: inst.module.id.to_string(),
+                        version: inst.module.version,
+                        description: def.map_or_else(String::new, |d| d.description.clone()),
                         required: inst.required,
+                        status: def.map(status).unwrap_or_default(),
                         body: def.map_or_else(Vec::new, |d| elements(p, inst, "", &d.body, 0)),
                     }
                 }
@@ -259,6 +308,7 @@ fn elements(
                             unit: c.unit.clone(),
                             unit_placement: c.unit_placement,
                             align: c.align,
+                            width: c.width,
                         })
                         .collect(),
                     rows: data
@@ -303,9 +353,61 @@ fn elements(
                     },
                 }
             }
-            ElementKind::Latex { source } => ElView::Latex {
-                source: source.clone(),
-            },
+            ElementKind::List { items, ordered } => {
+                let path = format!("{scope}{items}");
+                let rows = match p.effective_value(inst, &path) {
+                    Some(Value::Table(r)) => r.clone(),
+                    _ => Vec::new(),
+                };
+                ElView::List {
+                    ordered: *ordered,
+                    items: rows
+                        .iter()
+                        .map(|r| ItemView {
+                            id: r.id.to_string(),
+                            text: r
+                                .cells
+                                .get(&LIST_COLUMN.into())
+                                .cloned()
+                                .unwrap_or_default(),
+                        })
+                        .collect(),
+                    path,
+                }
+            }
+            ElementKind::Latex { source } => {
+                let mut fields: Vec<LatexFieldView> = Vec::new();
+                for segment in segments(source) {
+                    let (id, kind) = match segment {
+                        Segment::Text(_) => continue,
+                        Segment::Field(id) => (id, "text"),
+                        Segment::Raw(id) => (id, "raw"),
+                        Segment::Image { field, .. } => (field, "image"),
+                    };
+                    let path = format!("{scope}{id}");
+                    if fields.iter().any(|f| f.path == path) {
+                        continue;
+                    }
+                    let def = p
+                        .scope_module(&inst.module, &path)
+                        .and_then(|(def, f)| def.field(f));
+                    let value = match p.effective_value(inst, &path) {
+                        Some(Value::Text(s) | Value::Number(s) | Value::Image(s)) => s.clone(),
+                        _ => String::new(),
+                    };
+                    fields.push(LatexFieldView {
+                        label: def.map_or_else(|| id.to_owned(), |f| f.label.clone()),
+                        numeric: def.is_some_and(|f| f.kind == formavium_core::FieldKind::Number),
+                        path,
+                        kind,
+                        value,
+                    });
+                }
+                ElView::Latex {
+                    source: source.clone(),
+                    fields,
+                }
+            }
         })
         .collect()
 }

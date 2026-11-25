@@ -7,17 +7,22 @@
   import Feedback from './lib/Feedback.svelte';
   import Menu from './lib/Menu.svelte';
   import Menubar from './lib/Menubar.svelte';
+  import Miniature from './lib/Miniature.svelte';
   import Palette from './lib/Palette.svelte';
+  import Picker, { type PickerMode } from './lib/Picker.svelte';
   import Shortcuts from './lib/Shortcuts.svelte';
+  import Workshop from './lib/Workshop.svelte';
   import { runShortcut, type Cmd } from './lib/commands';
-  import { confirmDialog } from './lib/dialogs.svelte';
+  import { confirmDialog, promptDialog } from './lib/dialogs.svelte';
   import { REPO, openInBrowser } from './lib/feedback';
+  import { slug, type LibModule, type LibTemplate, type LibraryView, type ModuleDef } from './lib/library';
   import { openMenuBelow, type MenuItem } from './lib/menus.svelte';
   import { clearResources } from './lib/resources';
   import { dismissToast, notify, toastState } from './lib/toast.svelte';
   import { checkForUpdate, installUpdate, startAutoUpdate, updateState } from './lib/updates.svelte';
   import {
     call,
+    invokeApp,
     isTauri,
     pickDir,
     pickOpen,
@@ -26,6 +31,8 @@
     type Command,
     type Diag,
     type Doc,
+    type ModulePart,
+    type PartView,
     type Preview,
     type SourceEditResult,
   } from './lib/api';
@@ -33,6 +40,7 @@
   let doc = $state<Doc | null>(null);
   let preview = $state<Preview | null>(null);
   let sourceView = $state<SourceView>();
+  let visualView = $state<VisualView>();
   let showKeys = $state(false);
   let showPalette = $state(false);
   let showFeedback = $state(false);
@@ -65,6 +73,7 @@
     pollTimer = setInterval(pollPreview, 300);
     pollPreview();
     guardClose();
+    loadLibrary();
     startAutoUpdate(() => !doc);
   });
   onDestroy(() => {
@@ -203,17 +212,197 @@
     if (path) await openPath(path);
   }
 
-  async function newSample() {
+  async function newFromTemplate(t: LibTemplate) {
     if (!(await mayLeave())) return;
-    const path = await pickSave('Übungsdokument „Montageanleitung“ anlegen', fvm, `${defaultDir}anleitung.fvm`);
+    const path = await pickSave(`Neues Dokument aus „${t.name}“ anlegen`, fvm, `${defaultDir}${slug(t.name)}.fvm`);
     if (!path) return;
-    const d = await guarded(() => call<Doc>('new_sample', { path }));
+    const d = await guarded(() => call<Doc>('new_document', { path, template: t.id }));
     if (d) {
+      closeWorkshop();
       opened(d);
       // Das Dokument liegt in einem eigenen Ordner mit seinem Namen.
       notify('info', `Angelegt: ${d.path}`);
     }
   }
+
+  async function closeDoc() {
+    if (!doc || !(await mayLeave())) return;
+    await guarded(() => call('close'));
+    closeWorkshop();
+    doc = null;
+    preview = null;
+  }
+
+  async function renameDoc() {
+    if (!doc) return;
+    const title = await promptDialog({ title: 'Titel des Dokuments', value: doc.title });
+    if (title?.trim()) await command({ op: 'set_title', title: title.trim() });
+  }
+
+  // --- Bibliothek: Module und Vorlagen ---
+
+  let library = $state<LibraryView | null>(null);
+  let picker = $state<PickerMode | null>(null);
+
+  async function loadLibrary() {
+    library = (await guarded(() => call<LibraryView>('library'))) ?? library;
+  }
+
+  function openPicker(mode: PickerMode) {
+    picker = mode;
+    loadLibrary();
+  }
+
+  /** Antwort eines Sitzungsbefehls übernehmen, der das Dokument ändert. */
+  function sessionEdit<T>(name: string, args: Record<string, unknown>, take: (result: T) => Doc): Promise<T | undefined> {
+    return enqueue(async () => {
+      if (!doc) return undefined;
+      const result = await guarded(() => call<T>(name, { base: doc!.revision, ...args }));
+      if (result) doc = take(result);
+      pollPreview();
+      return result;
+    });
+  }
+
+  function pickModule(index?: number) {
+    if (!doc) return;
+    openPicker({ kind: 'module', index: index ?? visualView?.insertIndex() ?? doc.parts.length });
+  }
+
+  async function insertFromLibrary(m: LibModule, index: number) {
+    const at = Math.min(index, doc?.parts.length ?? 0);
+    const d = await sessionEdit<Doc>('insert_module', { index: at, module: { id: m.id, version: m.version } }, (r) => r);
+    if (!d) return;
+    layout.show.visual = true;
+    visualView?.focusPart(at);
+  }
+
+  async function insertLatex() {
+    if (!doc) return;
+    const index = visualView?.insertIndex() ?? doc.parts.length;
+    const d = await command({ op: 'insert_part', index, content: { kind: 'latex', source: 'Neuer Abschnitt.\n' } });
+    if (d) visualView?.focusPart(index);
+  }
+
+  // Modul-Werkstatt: bearbeitet die Definition eines Moduls dieses Dokuments.
+  type ModuleRef = { id: string; version: number };
+  let editing = $state<ModuleRef | null>(null);
+  let moduleDef = $state<ModuleDef | null>(null);
+  let editingKey = $derived(editing ? `${editing.id}@${editing.version}` : null);
+  let editingParts = $derived(
+    (doc?.parts ?? []).filter((p): p is ModulePart => p.kind === 'module' && p.module === editingKey),
+  );
+
+  function closeWorkshop() {
+    editing = null;
+    moduleDef = null;
+  }
+
+  // Definition nach jeder Änderung des Dokuments neu holen (auch nach Rückgängig).
+  $effect(() => {
+    const ref = editing;
+    const revision = doc?.revision;
+    if (!ref || revision === undefined) return;
+    let alive = true;
+    call<ModuleDef>('module_def', { module: ref })
+      .then((def) => {
+        if (alive) moduleDef = def;
+      })
+      .catch(() => {
+        // Das Modul gibt es in diesem Stand nicht mehr.
+        if (alive) closeWorkshop();
+      });
+    return () => {
+      alive = false;
+    };
+  });
+
+  function editModule(p: ModulePart) {
+    editing = { id: p.module_id, version: p.version };
+    layout.show.visual = true;
+  }
+
+  async function publishModule(ref: ModuleRef, name: string) {
+    const r = await sessionEdit<{ doc: Doc; module: ModuleRef }>('publish_module', { module: ref }, (x) => x.doc);
+    if (!r) return;
+    if (editing?.id === ref.id && editing.version === ref.version) editing = r.module;
+    notify('info', `„${name}“ steht als Version ${r.module.version} in der Bibliothek.`);
+    loadLibrary();
+  }
+
+  async function upgradeModule(p: ModulePart) {
+    const d = await sessionEdit<Doc>('upgrade_module', { module: { id: p.module_id, version: p.version } }, (r) => r);
+    if (!d) return;
+    if (editing?.id === p.module_id) closeWorkshop();
+    notify('info', `„${p.name}“ nutzt jetzt Version ${p.status.newer}. Strg+Z stellt den alten Stand wieder her.`);
+  }
+
+  async function newModule(index?: number) {
+    if (!doc) return;
+    const name = await promptDialog({
+      title: 'Neues Modul',
+      message: 'Das Modul entsteht an dieser Stelle im Dokument. Du baust es in der Werkstatt aus und speicherst es danach in der Bibliothek.',
+      value: 'Neues Modul',
+    });
+    if (!name?.trim()) return;
+    const at = index ?? visualView?.insertIndex() ?? doc.parts.length;
+    const r = await sessionEdit<{ doc: Doc; module: ModuleRef }>('new_module', { index: at, name }, (x) => x.doc);
+    if (!r) return;
+    editing = r.module;
+    layout.show.visual = true;
+    visualView?.focusPart(at);
+  }
+
+  async function partToModule(p: PartView) {
+    const name = await promptDialog({
+      title: 'In Modul umwandeln',
+      message: 'Der LaTeX-Abschnitt wird zu einem Modul. In der Werkstatt markierst du danach die Stellen, die Eingabefelder werden sollen.',
+      value: 'Neues Modul',
+    });
+    if (!name?.trim()) return;
+    const r = await sessionEdit<{ doc: Doc; module: ModuleRef }>('part_to_module', { part: p.id, name }, (x) => x.doc);
+    if (r) editing = r.module;
+  }
+
+  async function saveTemplate() {
+    if (!doc) return;
+    const title = await promptDialog({
+      title: 'Als Vorlage speichern',
+      message: 'Name der Vorlage. Aufbau, Module und Seitenlayout werden übernommen.',
+      value: doc.title,
+    });
+    if (!title?.trim()) return;
+    const clear = await confirmDialog({
+      title: 'Eingaben in der Vorlage',
+      message: 'Sollen die ausgefüllten Inhalte in der Vorlage stehen bleiben? Geleerte Felder zeigen in neuen Dokumenten die Vorgaben der Module.',
+      okLabel: 'Felder leeren',
+      cancelLabel: 'Inhalte behalten',
+    });
+    const r = await guarded(() => call<{ id: string }>('save_template', { title, description: '', keep_values: !clear }));
+    if (r) {
+      notify('info', `Vorlage „${title.trim()}“ gespeichert.`);
+      loadLibrary();
+    }
+  }
+
+  async function deleteLibraryItem(item: { module: LibModule } | { template: LibTemplate }) {
+    const name = 'module' in item ? item.module.name : item.template.name;
+    const ok = await confirmDialog({
+      title: `„${name}“ aus der Bibliothek löschen?`,
+      message: 'Dokumente, die den Baustein schon verwenden, behalten ihren Stand.',
+      okLabel: 'Löschen',
+      danger: true,
+    });
+    if (!ok) return;
+    if ('module' in item) {
+      await guarded(() => call('delete_library_module', { module: { id: item.module.id, version: item.module.version } }));
+    } else {
+      await guarded(() => call('delete_template', { id: item.template.id }));
+    }
+    loadLibrary();
+  }
+
+  const revealLibrary = () => guarded(() => invokeApp('reveal_library'));
 
   async function savePdf() {
     if (!doc || !preview) return;
@@ -477,7 +666,7 @@
   let commands = $derived.by((): Cmd[] => {
     const has = !!doc;
     return [
-      { id: 'new', title: 'Übungsdokument anlegen …', group: 'Datei', keys: 'Strg+N', run: newSample },
+      { id: 'new', title: 'Neu aus Vorlage …', group: 'Datei', keys: 'Strg+N', run: () => openPicker({ kind: 'template' }) },
       { id: 'open', title: 'Öffnen …', group: 'Datei', keys: 'Strg+O', run: openDoc },
       ...recent.slice(0, 5).map(
         (path, i): Cmd => ({
@@ -493,6 +682,40 @@
       { id: 'save', title: 'Speichern', group: 'Datei', keys: 'Strg+S', divider: true, enabled: has, run: save },
       { id: 'pdf', title: 'Als PDF speichern …', group: 'Datei', keys: 'Strg+P', divider: true, enabled: has && !!preview?.shown_revision, run: savePdf },
       { id: 'export', title: 'LaTeX exportieren …', group: 'Datei', keys: 'Strg+Umschalt+E', enabled: has, run: exportLatex },
+      { id: 'template', title: 'Als Vorlage speichern …', group: 'Datei', divider: true, enabled: has, run: saveTemplate },
+      { id: 'rename', title: 'Titel ändern …', group: 'Datei', enabled: has, run: renameDoc },
+      { id: 'close', title: 'Dokument schließen', group: 'Datei', keys: 'Strg+W', divider: true, enabled: has, run: closeDoc },
+
+      { id: 'insert-module', title: 'Modul aus der Bibliothek …', group: 'Einfügen', keys: 'Strg+M', enabled: has, run: () => pickModule() },
+      { id: 'insert-latex', title: 'LaTeX-Abschnitt', group: 'Einfügen', enabled: has, run: insertLatex },
+      { id: 'new-module', title: 'Neues Modul erstellen …', group: 'Einfügen', divider: true, enabled: has, run: () => newModule() },
+      ...(library?.modules ?? [])
+        .filter((m) => m.latest)
+        .map(
+          (m): Cmd => ({
+            id: `module:${m.id}`,
+            title: `Modul einfügen: ${m.name}`,
+            detail: m.description,
+            group: 'Einfügen',
+            paletteOnly: true,
+            enabled: has,
+            run: () => insertFromLibrary(m, visualView?.insertIndex() ?? doc?.parts.length ?? 0),
+          }),
+        ),
+      ...(library?.templates ?? []).map(
+        (t): Cmd => ({
+          id: `template:${t.id}`,
+          title: `Neu aus Vorlage: ${t.name}`,
+          detail: t.description,
+          group: 'Datei',
+          paletteOnly: true,
+          run: () => newFromTemplate(t),
+        }),
+      ),
+
+      { id: 'library', title: 'Module und Vorlagen …', group: 'Bibliothek', run: () => openPicker({ kind: 'manage' }) },
+      { id: 'library-publish', title: 'Bearbeitetes Modul in Bibliothek speichern', group: 'Bibliothek', enabled: !!editing && !!editingParts[0]?.status.local, run: () => editing && moduleDef && publishModule(editing, moduleDef.name) },
+      { id: 'library-dir', title: 'Bibliotheksordner öffnen', group: 'Bibliothek', divider: true, enabled: isTauri, run: revealLibrary },
 
       { id: 'undo', title: 'Rückgängig', group: 'Bearbeiten', keys: 'Strg+Z', notInFields: true, enabled: !!doc?.can_undo, run: undo },
       { id: 'redo', title: 'Wiederholen', group: 'Bearbeiten', keys: 'Strg+Y', notInFields: true, enabled: !!doc?.can_redo, run: redo },
@@ -546,7 +769,8 @@
 
     <div class="doc-title">
       {#if doc}
-        <span class="name">{doc.title}</span>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span class="name" title="Doppelklick ändert den Titel" ondblclick={renameDoc}>{doc.title}</span>
         {#if doc.dirty}<span class="dirty" title="Ungespeicherte Änderungen">●</span>{/if}
         <span class="path" title={doc.path}>{doc.path}</span>
       {/if}
@@ -617,21 +841,57 @@
             {#if key === 'source'}
               <SourceView bind:this={sourceView} {doc} {errorLines} onSourceEdit={sourceEdit} onUndo={undo} onRedo={redo} />
             {:else if key === 'visual'}
-              <VisualView {doc} {errorParts} onCommand={command} onImage={setImage} onJump={jump} />
+              <VisualView
+                bind:this={visualView}
+                {doc}
+                {errorParts}
+                editing={editingKey}
+                onCommand={command}
+                onImage={setImage}
+                onJump={jump}
+                onPick={pickModule}
+                onEditModule={editModule}
+                onPublish={(p) => publishModule({ id: p.module_id, version: p.version }, p.name)}
+                onUpgrade={upgradeModule}
+                onToModule={partToModule}
+              />
             {:else}
               <PdfView {preview} revision={doc.revision} onDiag={jumpDiag} />
             {/if}
           </div>
         </section>
       {/each}
+      {#if editing && moduleDef}
+        <section class="pane workshop" aria-label="Modul-Werkstatt">
+          <Workshop
+            def={moduleDef}
+            status={editingParts[0]?.status ?? null}
+            uses={editingParts.length}
+            canPublish={!!library?.dir}
+            onUpdate={(def) => command({ op: 'update_module', def })}
+            onPublish={() => editing && moduleDef && publishModule(editing, moduleDef.name)}
+            onClose={closeWorkshop}
+          />
+        </section>
+      {/if}
     </main>
   {:else}
     <main class="welcome">
       <div class="card">
         <h1>Dokumente einmal gestalten, beliebig oft ausfüllen.</h1>
-        <p>Beginne mit dem Übungsdokument „Montageanleitung“: zwei Materiallisten, freies LaTeX und eine PDF-Vorschau.</p>
+        <p>Wähle eine Vorlage oder öffne ein Dokument. Mit Strg+K erreichst du jeden Befehl über die Tastatur.</p>
+        {#if library?.templates.length}
+          <div class="templates">
+            {#each library.templates.slice(0, 6) as t (t.id)}
+              <button class="template" onclick={() => newFromTemplate(t)} title={t.description}>
+                <Miniature outline={t.outline} />
+                <span class="file">{t.name}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div class="actions">
-          <button class="primary" onclick={newSample}>Übungsdokument anlegen</button>
+          <button class="primary" onclick={() => openPicker({ kind: 'template' })}>Alle Vorlagen …</button>
           <button class="ghost" onclick={openDoc}>Dokument öffnen …</button>
         </div>
         {#if recent.length}
@@ -703,6 +963,15 @@
     </div>
   {/if}
 
+  <Picker
+    bind:mode={picker}
+    {library}
+    onModule={insertFromLibrary}
+    onTemplate={newFromTemplate}
+    onNewModule={newModule}
+    onDelete={deleteLibraryItem}
+    onRevealDir={isTauri ? revealLibrary : undefined}
+  />
   <Menu />
   <Palette bind:open={showPalette} {commands} />
   <Shortcuts bind:open={showKeys} />
@@ -849,6 +1118,38 @@
   .pane.moving {
     opacity: 0.5;
   }
+  /* Die Werkstatt steht fest am rechten Rand. */
+  .pane.workshop {
+    flex: 0 0 clamp(300px, 30vw, 440px);
+    border-left: 1px solid var(--line-strong);
+  }
+  .templates {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .template {
+    display: grid;
+    gap: 6px;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 6px;
+    cursor: pointer;
+  }
+  .template:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .template .file {
+    font-size: 13px;
+    font-weight: 600;
+    padding: 0 2px;
+  }
   .pane.drop-before::before,
   .pane.drop-after::after {
     content: '';
@@ -961,7 +1262,7 @@
     overflow: auto;
   }
   .card {
-    width: min(560px, 100%);
+    width: min(720px, 100%);
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 14px;

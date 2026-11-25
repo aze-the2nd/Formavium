@@ -6,21 +6,29 @@
   import EditableText from './EditableText.svelte';
   import ElementView from './ElementView.svelte';
   import { openMenu, openMenuBelow, type MenuItem } from './menus.svelte';
-  import type { Command, ContentKind, Doc, PartView } from './api';
+  import type { Command, Doc, ModulePart, PartView } from './api';
 
   type Props = {
     doc: Doc;
     errorParts: string[];
+    /** Modul, das gerade in der Werkstatt bearbeitet wird (`kennung@version`). */
+    editing: string | null;
     onCommand: (cmd: Command) => Promise<Doc | undefined>;
     onImage: (part: string, field: string, file: File) => void;
     onJump: (offset: number) => void;
+    /** Modul aus der Bibliothek an dieser Stelle einfügen. */
+    onPick: (index: number) => void;
+    onEditModule: (p: ModulePart) => void;
+    onPublish: (p: ModulePart) => void;
+    onUpgrade: (p: ModulePart) => void;
+    onToModule: (p: PartView) => void;
   };
-  let { doc, errorParts, onCommand, onImage, onJump }: Props = $props();
+  let { doc, errorParts, editing, onCommand, onImage, onJump, onPick, onEditModule, onPublish, onUpgrade, onToModule }: Props =
+    $props();
 
   let root = $state<HTMLDivElement>();
   let selected = $state<string | null>(null);
 
-  const kindLabel: Record<ContentKind, string> = { text: 'Text', table: 'Tabelle', image: 'Bild', latex: 'LaTeX' };
   const partEl = (id: string) => root?.querySelector<HTMLElement>(`li.part[data-part="${CSS.escape(id)}"]`);
   const notices = (p: PartView) => doc.notices.filter((n) => n.part === p.id);
 
@@ -42,25 +50,31 @@
 
   const insertLatex = (index: number) => insert(index, { kind: 'latex', source: 'Neuer Abschnitt.\n' });
 
-  const insertModule = (m: Doc['modules'][number], index: number) =>
-    insert(index, {
-      kind: 'module',
-      module: { id: m.id, version: m.version },
-      values: {},
-      column_order: {},
-      required: false,
-    });
-
   function insertItems(index: number): MenuItem[] {
     return [
       { heading: 'Hier einfügen' },
+      { label: 'Modul aus der Bibliothek …', hint: 'Strg+M', action: () => onPick(index) },
       { label: 'LaTeX-Abschnitt', action: () => insertLatex(index) },
-      ...doc.modules.map((m) => ({
-        label: `Modul „${m.name}“`,
-        hint: m.kinds.map((k) => kindLabel[k]).join(', '),
-        action: () => insertModule(m, index),
-      })),
     ];
+  }
+
+  /** Nach dem Einfügen von außen: neuen Abschnitt auswählen und sein erstes Feld markieren. */
+  export async function focusPart(index: number) {
+    await tick();
+    const id = doc.parts[index]?.id;
+    if (!id) return;
+    selected = id;
+    const el = partEl(id);
+    const field = el?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+    (field ?? el)?.focus();
+    field?.select();
+    el?.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** Stelle für „Einfügen“ aus Menü und Tastatur: hinter dem gewählten Abschnitt, sonst am Ende. */
+  export function insertIndex(): number {
+    const i = doc.parts.findIndex((p) => p.id === selected);
+    return i < 0 ? doc.parts.length : i + 1;
   }
 
   async function movePart(id: string, delta: number) {
@@ -96,9 +110,19 @@
         action: () => movePart(p.id, 1),
       },
       { separator: true },
-      { label: 'LaTeX-Abschnitt darüber', action: () => insertLatex(i) },
+      ...(p.kind === 'module'
+        ? [
+            { label: 'Modul bearbeiten …', hint: 'Doppelklick', action: () => onEditModule(p) },
+            { label: 'In Bibliothek speichern', disabled: !p.status.local, action: () => onPublish(p) },
+            ...(p.status.newer
+              ? [{ label: `Auf Version ${p.status.newer} aktualisieren`, action: () => onUpgrade(p) }]
+              : []),
+          ]
+        : [{ label: 'In Modul umwandeln …', action: () => onToModule(p) }]),
+      { separator: true },
+      { label: 'Modul darüber einfügen …', action: () => onPick(i) },
+      { label: 'Modul darunter einfügen …', action: () => onPick(i + 1) },
       { label: 'LaTeX-Abschnitt darunter', action: () => insertLatex(i + 1) },
-      ...doc.modules.map((m) => ({ label: `Modul „${m.name}“ darunter`, action: () => insertModule(m, i + 1) })),
       { separator: true },
       { label: 'Abschnitt entfernen', hint: 'Entf', danger: true, action: () => removePart(p.id) },
     ];
@@ -226,6 +250,7 @@
           class="part"
           class:selected={selected === p.id}
           class:has-error={errorParts.includes(p.id)}
+          class:editing={p.kind === 'module' && p.module === editing}
           class:dragging={drag?.active && drag.id === p.id}
           class:drop-before={dropBefore(i)}
           class:drop-after={dropAfter(i)}
@@ -257,10 +282,22 @@
             >
           </button>
           <div class="frame">
-            <header>
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <header ondblclick={() => p.kind === 'module' && onEditModule(p)}>
               {#if p.kind === 'module'}
                 <span class="badge">Modul</span>
-                <span class="name">{p.name}</span>
+                <span class="name" title={p.description || undefined}>{p.name}</span>
+                {#if p.status.newer}
+                  <button class="state update" title="In der Bibliothek gibt es eine neuere Version" onclick={() => onUpgrade(p)}
+                    >Version {p.status.newer} verfügbar</button
+                  >
+                {:else if p.status.local}
+                  <button
+                    class="state"
+                    title="Dieser Stand steht nur im Dokument. Klick öffnet die Modul-Werkstatt."
+                    onclick={() => onEditModule(p)}>nur im Dokument</button
+                  >
+                {/if}
                 {#if p.required}
                   <span class="req" title="Von der Vorlage als erforderlich gekennzeichnet">erforderlich</span>
                 {/if}
@@ -406,6 +443,26 @@
   }
   .req {
     color: var(--warn);
+  }
+  .state {
+    font: inherit;
+    color: var(--muted);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .state:hover {
+    color: var(--text);
+    text-decoration: underline;
+  }
+  .state.update {
+    color: var(--accent-strong);
+    font-weight: 600;
+  }
+  .part.editing .frame {
+    border-color: var(--accent-strong);
+    border-style: dashed;
   }
   .notice {
     font-size: 12px;

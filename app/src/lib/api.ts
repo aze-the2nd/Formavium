@@ -11,30 +11,46 @@ export type Col = {
   unit: string | null;
   unit_placement: 'header' | 'value';
   align: 'left' | 'center' | 'right';
+  width: number | null;
 };
 export type RowView = { id: string; cells: string[] };
+
+/** Eingabefeld innerhalb eines LaTeX-Elements. */
+export type LatexField = {
+  path: string;
+  label: string;
+  kind: 'text' | 'raw' | 'image';
+  value: string;
+  numeric: boolean;
+};
 
 export type El =
   | { kind: 'heading'; level: number; text: string; field: string | null; numeric: boolean }
   | { kind: 'paragraph'; text: string; field: string | null; numeric: boolean }
   | { kind: 'table'; path: string; rows_path: string; caption: string | null; columns: Col[]; rows: RowView[] }
   | { kind: 'image'; field: string; value: string | null; width: number }
+  | { kind: 'list'; path: string; ordered: boolean; items: { id: string; text: string }[] }
   | { kind: 'row'; children: El[] }
   | { kind: 'module'; name: string; children: El[] }
-  | { kind: 'latex'; source: string };
+  | { kind: 'latex'; source: string; fields: LatexField[] };
 
-export type PartView =
-  | { kind: 'latex'; id: string; offset: number; line: number; source: string }
-  | {
-      kind: 'module';
-      id: string;
-      offset: number;
-      line: number;
-      name: string;
-      module: string;
-      required: boolean;
-      body: El[];
-    };
+export type ModulePart = {
+  kind: 'module';
+  id: string;
+  offset: number;
+  line: number;
+  name: string;
+  module: string;
+  module_id: string;
+  version: number;
+  description: string;
+  required: boolean;
+  /** Verhältnis zur Bibliothek: lokal geändert, neuere Version vorhanden. */
+  status: { local: boolean; newer: number | null };
+  body: El[];
+};
+
+export type PartView = { kind: 'latex'; id: string; offset: number; line: number; source: string } | ModulePart;
 
 export type Doc = {
   path: string;
@@ -95,7 +111,9 @@ export type Command =
   | { op: 'set_column_header'; part: string; table: string; column: string; header: string }
   | { op: 'insert_part'; index: number; content: unknown }
   | { op: 'remove_part'; part: string }
-  | { op: 'move_part'; part: string; to: number };
+  | { op: 'move_part'; part: string; to: number }
+  | { op: 'update_module'; def: unknown }
+  | { op: 'set_title'; title: string };
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 

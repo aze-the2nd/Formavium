@@ -61,7 +61,9 @@ fn walk_elements<'a>(
 ) -> Result<(), CatalogError> {
     for el in body {
         match &el.kind {
-            ElementKind::Heading { .. } | ElementKind::Paragraph { .. } => {
+            ElementKind::Heading { .. }
+            | ElementKind::Paragraph { .. }
+            | ElementKind::List { .. } => {
                 kinds.insert(ContentKind::Text);
             }
             ElementKind::Table { .. } => {

@@ -47,6 +47,8 @@ impl RenderRequest {
                 .resources
                 .iter()
                 .map(|r| (r.clone(), project_dir.join(r)))
+                // Fehlende Bilder meldet LaTeX an der Stelle der Einbindung.
+                .filter(|(_, src)| src.is_file())
                 .collect(),
         }
     }

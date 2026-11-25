@@ -46,6 +46,9 @@ pub struct Project {
     pub format: String,
     pub schema: u32,
     pub title: String,
+    /// Kurzbeschreibung, vor allem für Vorlagen.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     /// Freies LaTeX vor `\begin{document}`, einschließlich `\documentclass`.
     pub preamble: String,
     pub parts: Vec<Part>,
@@ -123,6 +126,9 @@ pub struct ModuleDef {
     pub id: Id,
     pub version: u32,
     pub name: String,
+    /// Kurzbeschreibung für die Modulauswahl.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     #[serde(default)]
     pub fields: Vec<FieldDef>,
     pub body: Vec<Element>,
@@ -220,6 +226,13 @@ pub enum ElementKind {
         /// Breite als Anteil der verfügbaren Zeilenbreite.
         width: f32,
     },
+    /// Aufzählung oder nummerierte Liste. Die Punkte stammen aus einem
+    /// Tabellenfeld mit der einen Spalte [`LIST_COLUMN`].
+    List {
+        items: Id,
+        #[serde(default)]
+        ordered: bool,
+    },
     /// Horizontale Anordnung.
     Row {
         children: Vec<Element>,
@@ -228,11 +241,16 @@ pub enum ElementKind {
     Module {
         module: ModuleRef,
     },
-    /// Vom Modulautor geschriebener LaTeX-Quelltext.
+    /// Vom Modulautor geschriebener LaTeX-Quelltext. Eingabefelder stehen
+    /// darin als `\feld{kennung}` (Text, maskiert), `\rohfeld{kennung}`
+    /// (LaTeX, unverändert) und `\bildfeld[optionen]{kennung}` (Bild).
     Latex {
         source: String,
     },
 }
+
+/// Spaltenkennung der Punkte einer Liste.
+pub const LIST_COLUMN: &str = "text";
 
 /// Text eines Elements: fest vorgegeben oder aus einem Eingabefeld.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -252,6 +270,10 @@ pub struct Column {
     pub unit_placement: UnitPlacement,
     #[serde(default)]
     pub align: Align,
+    /// Feste Breite als Anteil der Zeilenbreite. Der Text bricht dann in
+    /// der Zelle um. Ohne Angabe richtet sich die Breite nach dem Inhalt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +299,7 @@ impl Project {
             format: FORMAT_TAG.to_owned(),
             schema: SCHEMA_VERSION,
             title: title.into(),
+            description: String::new(),
             preamble: preamble.into(),
             parts: Vec::new(),
             modules: Vec::new(),

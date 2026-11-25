@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use crate::model::{
     Align, Column, Element, ElementKind, Id, ModuleInstance, ModuleRef, PartContent, Project, Row,
-    Text, UnitPlacement, Value,
+    Text, UnitPlacement, Value, LIST_COLUMN,
 };
 
 /// Herkunft eines Bereichs im erzeugten Quelltext.
@@ -303,6 +303,8 @@ pub fn generate(project: &Project) -> Generated {
         w.push(project.preamble.trim_end());
         w.push("\n");
     });
+    // Bilder aus freiem LaTeX (etwa ein Logo in der Kopfzeile).
+    scan_graphics(&project.preamble, &mut w.out.resources);
     let packages = required_packages(project);
     for pkg in packages {
         if !project.preamble.contains(pkg) {
@@ -326,6 +328,7 @@ pub fn generate(project: &Project) -> Generated {
                         if !source.ends_with('\n') {
                             w.push("\n");
                         }
+                        scan_graphics(source, &mut w.out.resources);
                     },
                 );
             }
@@ -366,16 +369,33 @@ pub fn generate(project: &Project) -> Generated {
 
 fn required_packages(project: &Project) -> Vec<&'static str> {
     let mut graphicx = false;
+    // Spalten fester Breite brauchen `array` für die Ausrichtung.
+    let mut array = false;
     for def in &project.modules {
-        visit(&def.body, &mut |k| {
-            if let ElementKind::Image { .. } = k {
-                graphicx = true;
+        visit(&def.body, &mut |k| match k {
+            ElementKind::Image { .. } => graphicx = true,
+            ElementKind::Latex { source } => {
+                graphicx |= segments(source)
+                    .iter()
+                    .any(|s| matches!(s, Segment::Image { .. }));
             }
+            ElementKind::Table { columns, .. } => {
+                array |= columns.iter().any(|c| c.width.is_some());
+            }
+            _ => {}
         });
+    }
+    for part in &project.parts {
+        if let PartContent::Module(inst) = &part.content {
+            array |= inst.columns.values().flatten().any(|c| c.width.is_some());
+        }
     }
     let mut v = Vec::new();
     if graphicx {
         v.push("graphicx");
+    }
+    if array {
+        v.push("array");
     }
     v
 }
@@ -547,9 +567,194 @@ fn emit_element(w: &mut Writer, ctx: &Ctx, el: &Element) {
                 }
             }
         }
+        ElementKind::List { items, ordered } => {
+            let path = ctx.path(items);
+            let data: Vec<Row> = match w.project.effective_value(ctx.inst, &path) {
+                Some(Value::Table(r)) => r.clone(),
+                _ => Vec::new(),
+            };
+            let env = if *ordered { "enumerate" } else { "itemize" };
+            let column = Id::from(LIST_COLUMN);
+            w.spanned(ctx.field_origin(items), |w| {
+                // Eine Liste ohne Punkte wäre in LaTeX ein Fehler.
+                if data.is_empty() {
+                    return;
+                }
+                let _ = writeln!(w.out.text, "\\begin{{{env}}}");
+                for row in &data {
+                    w.push("\\item ");
+                    let cell = row.cells.get(&column).map(String::as_str).unwrap_or("");
+                    let origin = Origin::Cell {
+                        part: ctx.part.clone(),
+                        path: path.clone(),
+                        row: row.id.clone(),
+                        column: column.clone(),
+                    };
+                    w.spanned(origin, |w| w.push(&escape_text(cell)));
+                    w.push("\n");
+                }
+                let _ = writeln!(w.out.text, "\\end{{{env}}}");
+            });
+            if data.is_empty() && ctx.inst.required {
+                w.notice(ctx.field_origin(items), format!("Liste „{path}“ ist leer"));
+            }
+        }
         ElementKind::Latex { source } => {
-            w.push(source.trim_end_matches(['\n', '\r']));
+            for segment in segments(source.trim_end_matches(['\n', '\r'])) {
+                match segment {
+                    Segment::Text(text) => {
+                        scan_graphics(text, &mut w.out.resources);
+                        w.push(text);
+                    }
+                    Segment::Field(id) => {
+                        let id = Id::from(id);
+                        let value = field_text(w, ctx, &id);
+                        if value.trim().is_empty() && ctx.inst.required {
+                            let path = ctx.path(&id);
+                            w.notice(
+                                ctx.field_origin(&id),
+                                format!("Pflichtangabe „{path}“ ist leer"),
+                            );
+                        }
+                        w.spanned(ctx.field_origin(&id), |w| w.push(&escape_text(&value)));
+                    }
+                    // LaTeX des Anwenders unverändert. Ohne Feldbereich:
+                    // Im Quelltext lässt es sich nicht eindeutig zurückführen.
+                    Segment::Raw(id) => {
+                        let value = field_text(w, ctx, &Id::from(id));
+                        w.push(value.trim());
+                    }
+                    Segment::Image { options, field } => {
+                        let id = Id::from(field);
+                        let value = match w.project.effective_value(ctx.inst, &ctx.path(&id)) {
+                            Some(Value::Image(p)) => Some(p.clone()),
+                            _ => None,
+                        };
+                        w.spanned(ctx.field_origin(&id), |w| match value {
+                            Some(p) if is_safe_resource_path(&p) => {
+                                let _ = write!(w.out.text, "\\includegraphics{options}{{{p}}}");
+                                w.out.resources.insert(p);
+                            }
+                            _ => placeholder(w, 0.6, "Bild"),
+                        });
+                    }
+                }
+            }
             w.push("\n");
+        }
+    }
+}
+
+/// Text- oder Zahlwert eines Feldes, sonst leer.
+fn field_text(w: &Writer, ctx: &Ctx, id: &Id) -> String {
+    match w.project.effective_value(ctx.inst, &ctx.path(id)) {
+        Some(Value::Text(s)) | Some(Value::Number(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Bestandteil eines LaTeX-Elements: fester Quelltext oder ein Eingabefeld.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Segment<'a> {
+    Text(&'a str),
+    /// `\feld{kennung}`: Text des Anwenders, maskiert.
+    Field(&'a str),
+    /// `\rohfeld{kennung}`: LaTeX des Anwenders, unverändert.
+    Raw(&'a str),
+    /// `\bildfeld[optionen]{kennung}`: Bild, `options` mit eckigen Klammern.
+    Image {
+        options: &'a str,
+        field: &'a str,
+    },
+}
+
+/// Zerlegt den Quelltext eines LaTeX-Elements an seinen Feldmarken.
+pub fn segments(source: &str) -> Vec<Segment<'_>> {
+    let mut out = Vec::new();
+    let mut text_start = 0;
+    let mut i = 0;
+    while let Some(found) = source[i..].find('\\') {
+        let at = i + found;
+        let rest = &source[at..];
+        let parsed = ["\\feld", "\\rohfeld", "\\bildfeld"]
+            .iter()
+            .find_map(|name| {
+                let after = rest.strip_prefix(name)?;
+                let (options, after) = match (*name == "\\bildfeld", after.strip_prefix('[')) {
+                    (true, Some(inner)) => {
+                        let close = inner.find(']')?;
+                        (&after[..close + 2], &inner[close + 1..])
+                    }
+                    _ => ("", after),
+                };
+                let inner = after.strip_prefix('{')?;
+                let close = inner.find('}')?;
+                let id = &inner[..close];
+                if id.is_empty() || id.contains(['{', '\\', ' ', '\n']) {
+                    return None;
+                }
+                let len = rest.len() - inner.len() + close + 1;
+                let segment = match *name {
+                    "\\feld" => Segment::Field(id),
+                    "\\rohfeld" => Segment::Raw(id),
+                    _ => Segment::Image { options, field: id },
+                };
+                Some((segment, len))
+            });
+        match parsed {
+            Some((segment, len)) => {
+                if at > text_start {
+                    out.push(Segment::Text(&source[text_start..at]));
+                }
+                out.push(segment);
+                i = at + len;
+                text_start = i;
+            }
+            None => i = at + 1,
+        }
+    }
+    if text_start < source.len() {
+        out.push(Segment::Text(&source[text_start..]));
+    }
+    out
+}
+
+/// Kennungen aller Felder, die ein LaTeX-Element verwendet.
+pub fn field_refs(source: &str) -> Vec<&str> {
+    segments(source)
+        .into_iter()
+        .filter_map(|s| match s {
+            Segment::Field(id) | Segment::Raw(id) | Segment::Image { field: id, .. } => Some(id),
+            Segment::Text(_) => None,
+        })
+        .collect()
+}
+
+/// Merkt Bilder vor, die freies LaTeX mit `\includegraphics` einbindet,
+/// damit sie beim Rendern und im Export bereitstehen.
+fn scan_graphics(text: &str, resources: &mut BTreeSet<String>) {
+    let mut rest = text;
+    while let Some(at) = rest.find("\\includegraphics") {
+        rest = &rest[at + "\\includegraphics".len()..];
+        let mut after = rest.trim_start();
+        if let Some(inner) = after.strip_prefix('[') {
+            match inner.find(']') {
+                Some(close) => after = inner[close + 1..].trim_start(),
+                None => continue,
+            }
+        }
+        let Some(inner) = after.strip_prefix('{') else {
+            continue;
+        };
+        let Some(close) = inner.find('}') else {
+            continue;
+        };
+        let path = inner[..close].trim();
+        let known = [".png", ".jpg", ".jpeg", ".pdf"]
+            .iter()
+            .any(|ext| path.to_ascii_lowercase().ends_with(ext));
+        if known && is_safe_resource_path(path) {
+            resources.insert(path.to_owned());
         }
     }
 }
@@ -613,11 +818,26 @@ fn emit_table(
     // Standard ist ein regelmäßiges Gitter: Linien um jede Zelle.
     let mut spec = String::from("|");
     for c in &cols {
-        spec.push(match c.align {
-            Align::Left => 'l',
-            Align::Center => 'c',
-            Align::Right => 'r',
-        });
+        match c.width {
+            // Feste Breite: Der Text bricht in der Zelle um.
+            Some(width) => {
+                let flush = match c.align {
+                    Align::Left => "raggedright",
+                    Align::Center => "centering",
+                    Align::Right => "raggedleft",
+                };
+                let width = width.clamp(0.03, 1.0);
+                let _ = write!(
+                    spec,
+                    ">{{\\{flush}\\arraybackslash}}p{{{width:.3}\\linewidth}}"
+                );
+            }
+            None => spec.push(match c.align {
+                Align::Left => 'l',
+                Align::Center => 'c',
+                Align::Right => 'r',
+            }),
+        }
         spec.push('|');
     }
     let _ = writeln!(w.out.text, "\\begin{{tabular}}{{{spec}}}\n\\hline");

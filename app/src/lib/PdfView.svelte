@@ -220,6 +220,10 @@
     filter: grayscale(0.4);
   }
   .pages :global(.page) {
+    /* Bis zum Neuzeichnen nach einer Größenänderung passt die Seite sich an. */
+    max-width: 100%;
+    height: auto;
+    flex: none;
     background: white;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 6px 18px rgba(0, 0, 0, 0.08);
   }

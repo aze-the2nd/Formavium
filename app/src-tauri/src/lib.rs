@@ -120,6 +120,33 @@ fn engine(app: &tauri::App) -> Result<TectonicEngine, Box<dyn std::error::Error>
     })
 }
 
+/// Ordner der eigenen Bibliothek: `Dokumente/Formavium/Bibliothek`, damit
+/// der Anwender ihn sieht, sichern und weitergeben kann. `FORMAVIUM_LIBRARY`
+/// zeigt auf einen anderen Ordner, etwa ein gemeinsames Laufwerk.
+fn library_dir(app: &tauri::App) -> Option<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("FORMAVIUM_LIBRARY") {
+        return Some(dir.into());
+    }
+    let docs = app.path().document_dir().ok()?;
+    Some(docs.join("Formavium").join("Bibliothek"))
+}
+
+/// Zeigt den Bibliotheksordner im Explorer und legt ihn dafür bei Bedarf an.
+#[tauri::command]
+fn reveal_library(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let dir = state
+        .0
+        .lock()
+        .map_err(|_| "Sitzung nicht verfügbar".to_owned())?
+        .library_dir()
+        .map(std::path::Path::to_path_buf)
+        .ok_or("Kein Bibliotheksordner eingerichtet")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -128,7 +155,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let engine = engine(app)?;
-            app.manage(AppState(Mutex::new(Session::new(Arc::new(engine)))));
+            let mut session = Session::new(Arc::new(engine));
+            session.set_library_dir(library_dir(app));
+            app.manage(AppState(Mutex::new(session)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -139,7 +168,8 @@ pub fn run() {
             feedback_set_token,
             feedback_clear_token,
             feedback_submit,
-            open_repo_url
+            open_repo_url,
+            reveal_library
         ])
         .run(tauri::generate_context!())
         .expect("Formavium konnte nicht gestartet werden");

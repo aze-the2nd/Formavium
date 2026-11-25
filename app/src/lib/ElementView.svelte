@@ -3,6 +3,8 @@
   import ElementView from './ElementView.svelte';
   import EditableText from './EditableText.svelte';
   import ImageView from './ImageView.svelte';
+  import LatexFieldsView from './LatexFieldsView.svelte';
+  import ListView from './ListView.svelte';
   import TableView from './TableView.svelte';
   import type { Command, Doc, El } from './api';
 
@@ -64,8 +66,10 @@
       <ElementView el={child} {part} {onCommand} {onImage} />
     {/each}
   </div>
+{:else if el.kind === 'list'}
+  <ListView list={el} {part} {onCommand} />
 {:else if el.kind === 'latex'}
-  <pre class="latex" title="Fester LaTeX-Anteil des Moduls">{el.source}</pre>
+  <LatexFieldsView {el} {part} {onCommand} {onImage} />
 {/if}
 
 <style>

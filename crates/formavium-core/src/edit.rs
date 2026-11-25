@@ -10,8 +10,8 @@ use thiserror::Error;
 use std::collections::BTreeMap;
 
 use crate::model::{
-    find_element, Align, Column, ElementKind, FieldKind, Id, Part, PartContent, Project, Row, Text,
-    UnitPlacement, Value,
+    find_element, Align, Column, ElementKind, FieldKind, Id, ModuleDef, ModuleInstance, ModuleRef,
+    Part, PartContent, Project, Row, Text, UnitPlacement, Value,
 };
 
 pub type Revision = u64;
@@ -107,6 +107,37 @@ pub enum Command {
         parts: Vec<Id>,
         source: String,
     },
+    /// Fügt eine Verwendung eines Moduls ein. Die Definition und ihre
+    /// Untermodule (`requires`) wandern ins Dokument, falls sie dort fehlen.
+    InsertModule {
+        index: usize,
+        def: ModuleDef,
+        #[serde(default)]
+        requires: Vec<ModuleDef>,
+    },
+    /// Ersetzt eine Moduldefinition des Dokuments (gleiche Kennung und
+    /// Version). Das ändert alle Verwendungen in diesem Dokument. Werte
+    /// entfallener Felder werden entfernt.
+    UpdateModule {
+        def: ModuleDef,
+    },
+    /// Stellt alle Verwendungen von `id@from` auf den Stand `def` um, etwa
+    /// auf eine neuere Version aus der Bibliothek.
+    UseModuleVersion {
+        id: Id,
+        from: u32,
+        def: ModuleDef,
+        #[serde(default)]
+        requires: Vec<ModuleDef>,
+    },
+    /// Macht aus einem freien LaTeX-Teil eine Verwendung des Moduls `def`.
+    ConvertPartToModule {
+        part: Id,
+        def: ModuleDef,
+    },
+    SetTitle {
+        title: String,
+    },
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -137,6 +168,8 @@ pub enum EditError {
     OutOfRange(usize),
     #[error("Moduldefinition {0} fehlt im Dokument")]
     MissingModule(String),
+    #[error("{0}")]
+    InvalidModule(String),
     #[error("Nichts zum Rückgängigmachen oder Wiederholen")]
     NothingToUndo,
 }
@@ -395,6 +428,7 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
                     unit: None,
                     unit_placement: UnitPlacement::default(),
                     align: Align::default(),
+                    width: None,
                 },
             );
             set_columns(p, &part, table, columns);
@@ -499,8 +533,142 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             );
             return Ok(Some(id));
         }
+        Command::InsertModule {
+            index,
+            def,
+            requires,
+        } => {
+            if index > p.parts.len() {
+                return Err(EditError::OutOfRange(index));
+            }
+            let module = def.reference();
+            adopt(p, def, requires)?;
+            let id = p.fresh_id("p");
+            p.parts.insert(
+                index,
+                Part {
+                    id: id.clone(),
+                    content: PartContent::Module(ModuleInstance::new(module)),
+                },
+            );
+            return Ok(Some(id));
+        }
+        Command::UpdateModule { def } => {
+            validate(&def)?;
+            let module = def.reference();
+            let slot = p
+                .modules
+                .iter_mut()
+                .find(|m| m.reference() == module)
+                .ok_or_else(|| EditError::MissingModule(module.to_string()))?;
+            *slot = def;
+            prune_values(p, &module);
+        }
+        Command::UseModuleVersion {
+            id,
+            from,
+            def,
+            requires,
+        } => {
+            let old = ModuleRef {
+                id: id.clone(),
+                version: from,
+            };
+            let new = def.reference();
+            if new.id != id {
+                return Err(EditError::InvalidModule(format!(
+                    "{new} ist keine Version von {id}"
+                )));
+            }
+            adopt(p, def, requires)?;
+            for part in &mut p.parts {
+                if let PartContent::Module(inst) = &mut part.content {
+                    if inst.module == old {
+                        inst.module = new.clone();
+                    }
+                }
+            }
+            prune_values(p, &new);
+            // Den alten Stand nur behalten, solange ihn noch etwas verwendet.
+            if old != new && !is_used(p, &old) {
+                p.modules.retain(|m| m.reference() != old);
+            }
+        }
+        Command::ConvertPartToModule { part, def } => {
+            let i = p
+                .part_index(&part)
+                .ok_or_else(|| EditError::UnknownPart(part.clone()))?;
+            if !matches!(p.parts[i].content, PartContent::Latex { .. }) {
+                return Err(EditError::WrongPartKind(part));
+            }
+            let module = def.reference();
+            adopt(p, def, Vec::new())?;
+            p.parts[i].content = PartContent::Module(ModuleInstance::new(module));
+        }
+        Command::SetTitle { title } => p.title = title,
     }
     Ok(None)
+}
+
+fn validate(def: &ModuleDef) -> Result<(), EditError> {
+    crate::library::validate_module(def).map_err(EditError::InvalidModule)
+}
+
+/// Übernimmt eine Moduldefinition und ihre Untermodule ins Dokument.
+fn adopt(p: &mut Project, def: ModuleDef, requires: Vec<ModuleDef>) -> Result<(), EditError> {
+    validate(&def)?;
+    for sub in requires {
+        validate(&sub)?;
+        p.add_module(sub);
+    }
+    p.add_module(def);
+    Ok(())
+}
+
+/// Ob eine Moduldefinition noch von einer Verwendung oder als Untermodul
+/// gebraucht wird.
+fn is_used(p: &Project, module: &ModuleRef) -> bool {
+    fn refers(body: &[crate::model::Element], module: &ModuleRef) -> bool {
+        body.iter().any(|el| match &el.kind {
+            ElementKind::Module { module: m } => m == module,
+            ElementKind::Row { children } => refers(children, module),
+            _ => false,
+        })
+    }
+    p.parts
+        .iter()
+        .any(|part| matches!(&part.content, PartContent::Module(i) if i.module == *module))
+        || p.modules.iter().any(|d| refers(&d.body, module))
+}
+
+/// Entfernt Eingaben, die zur Definition nicht mehr passen: Werte entfallener
+/// oder umgewidmeter Felder und Spaltenanpassungen entfallener Tabellen. So
+/// bleibt kein unsichtbarer Altinhalt im Dokument.
+fn prune_values(p: &mut Project, module: &ModuleRef) {
+    let Some(def) = p.module(module).cloned() else {
+        return;
+    };
+    for part in &mut p.parts {
+        let PartContent::Module(inst) = &mut part.content else {
+            continue;
+        };
+        if inst.module != *module {
+            continue;
+        }
+        inst.values.retain(|path, value| {
+            // Werte von Untermodulen (Pfad mit `/`) bleiben unberührt.
+            path.contains('/') || def.field(path).is_some_and(|f| f.kind == value.kind())
+        });
+        let is_table = |path: &String| {
+            path.contains('/')
+                || matches!(
+                    find_element(&def.body, path).map(|e| &e.kind),
+                    Some(ElementKind::Table { .. })
+                )
+        };
+        inst.column_order.retain(|path, _| is_table(path));
+        inst.columns.retain(|path, _| is_table(path));
+    }
 }
 
 /// Pfadpräfix eines Elements: `a/b/tabelle` → `a/b/`.

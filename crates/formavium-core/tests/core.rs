@@ -364,6 +364,7 @@ fn wrapper(inner: ModuleRef) -> ModuleDef {
         id: Id::from("bericht"),
         version: 1,
         name: "Bericht".into(),
+        description: String::new(),
         fields: vec![],
         body: vec![
             Element {
