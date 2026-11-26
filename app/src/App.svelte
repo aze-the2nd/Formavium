@@ -704,18 +704,20 @@
   /** Seitenbereich je Teil, für Seitenmarken im visuellen Editor. */
   let partPages = $derived.by(() => {
     if (!syncData) return null;
-    const out: Record<string, [number, number]> = {};
+    const out: Record<string, { range: [number, number]; breaks: [number, number][] }> = {};
     for (const [id, l0, l1] of syncData.parts) {
       let min = Infinity;
       let max = 0;
+      const breaks: [number, number][] = [];
       for (let l = l0; l <= l1; l++) {
         const at = syncData.lines[l];
-        if (at) {
-          min = Math.min(min, at[0]);
-          max = Math.max(max, at[0]);
-        }
+        if (!at) continue;
+        // Seitenwechsel innerhalb des Teils: ungefähre Lage als Anteil.
+        if (max && at[0] > max) breaks.push([at[0], (l - l0) / Math.max(1, l1 - l0)]);
+        min = Math.min(min, at[0]);
+        max = Math.max(max, at[0]);
       }
-      if (max) out[id] = [min, max];
+      if (max) out[id] = { range: [min, max], breaks };
     }
     return out;
   });
@@ -793,11 +795,15 @@
     driver = key;
     driverAt = performance.now();
   }
-  let syncFrame = 0;
+  let syncTimer: ReturnType<typeof setTimeout> | undefined;
   function scrolled(key: PaneKey) {
     if (!syncScroll || driver !== key || performance.now() - driverAt > 1500) return;
-    cancelAnimationFrame(syncFrame);
-    syncFrame = requestAnimationFrame(() => follow(key));
+    // Höchstens einmal je Bildaufbau nachziehen.
+    if (syncTimer) return;
+    syncTimer = setTimeout(() => {
+      syncTimer = undefined;
+      follow(key);
+    }, 16);
   }
 
   /** Zeile des erzeugten Quelltexts am oberen Rand der Ansicht. */
@@ -1033,7 +1039,7 @@
           class:on={layout.show[key]}
           aria-pressed={layout.show[key]}
           title="Strg+{i + 1}"
-          disabled={!doc}
+          disabled={!doc || (doc.free && key === 'visual')}
           onclick={() => toggle(key)}>{paneTitle[key]}</button
         >
       {/each}
@@ -1208,7 +1214,7 @@
   <footer class="statusbar">
     {#if doc}
       <span>Revision {doc.revision}</span>
-      <span>{doc.parts.length} Abschnitte</span>
+      <span>{doc.free ? 'Freies LaTeX' : `${doc.parts.length} Abschnitte`}</span>
       {#if doc.notices.length}<span class="warn">{doc.notices.length} Hinweise</span>{/if}
     {/if}
     <span class="spacer"></span>

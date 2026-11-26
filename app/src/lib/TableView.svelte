@@ -692,7 +692,10 @@
                     <input
                       class="cell-input"
                       class:mono={c.latex}
-                      bind:value={editing.value}
+                      value={editing.value}
+                      oninput={(e) => {
+                        if (editing) editing.value = e.currentTarget.value;
+                      }}
                       spellcheck="false"
                       aria-label="Zelle {address({ r, c: ci })} bearbeiten"
                       onkeydown={editKey}

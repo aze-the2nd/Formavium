@@ -230,15 +230,29 @@ pub fn highlight(g: &Generated, map: &SyncMap, targets: &[Target]) -> Vec<Rect> 
 /// im PDF (Seite, Oberkante), dazu die Zeilenbereiche der Teile.
 pub fn overview(g: &Generated, map: &SyncMap) -> Json {
     let total = g.line_of(g.text.len()) as usize;
+    // Je Zeile alle Stellen. Nur sichtbarer Inhalt: Leerraum und Kerning
+    // stehen oft am Seitenende und würden einen Teil auf die nächste Seite
+    // ziehen.
+    let mut all: Vec<Vec<(u32, f32)>> = vec![Vec::new(); total + 2];
+    for b in map.boxes.iter().filter(|b| b.hbox && b.w > 0.0) {
+        if let Some(slot) = all.get_mut(b.line as usize) {
+            slot.push((b.page, b.y - b.h));
+        }
+    }
+    // Kopf- und Fußzeilen einer Seite tragen die Zeile, an der TeX die Seite
+    // abschließt. Deshalb je Zeile die erste Stelle, die in Leserichtung
+    // nicht vor der vorigen Zeile liegt.
     let mut first: Vec<Option<(u32, f32)>> = vec![None; total + 2];
-    for b in &map.boxes {
-        let Some(slot) = first.get_mut(b.line as usize) else {
-            continue;
-        };
-        let top = b.y - b.h;
-        match slot {
-            Some((p, y)) if (*p, *y) <= (b.page, top) => {}
-            _ => *slot = Some((b.page, top)),
+    let mut last = (0u32, f32::MIN);
+    for (line, spots) in all.iter_mut().enumerate() {
+        spots.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let after = spots
+            .iter()
+            .find(|(p, y)| (*p, *y + 2.0) >= (last.0, last.1) || *p > last.0)
+            .copied();
+        if let Some(at) = after {
+            first[line] = Some(at);
+            last = at;
         }
     }
     let lines: Vec<Json> = first

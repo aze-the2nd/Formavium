@@ -25,7 +25,7 @@
     onUpgrade: (p: ModulePart) => void;
     onToModule: (p: PartView) => void;
     /** Seitenbereich je Teil im angezeigten PDF. */
-    pages: Record<string, [number, number]> | null;
+    pages: Record<string, { range: [number, number]; breaks: [number, number][] }> | null;
     /** Vom Anwender ausgelöstes Scrollen (für die Synchronisierung). */
     onScroll?: () => void;
   };
@@ -365,8 +365,8 @@
   /** Seitenwechsel vor Teil `i` im angezeigten PDF. */
   function pageBreak(i: number): number | null {
     if (!pages || i === 0) return null;
-    const here = pages[doc.parts[i].id];
-    const before = pages[doc.parts[i - 1].id];
+    const here = pages[doc.parts[i].id]?.range;
+    const before = pages[doc.parts[i - 1].id]?.range;
     return here && before && here[0] > before[1] ? here[0] : null;
   }
 </script>
@@ -437,6 +437,11 @@
             >
           </button>
           <div class="frame">
+            {#if !collapsed.includes(p.id)}
+              {#each pages?.[p.id]?.breaks ?? [] as [pg, at]}
+                <div class="inbreak" style:top="{8 + at * 88}%" aria-hidden="true"><span>Seite {pg}</span></div>
+              {/each}
+            {/if}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <header ondblclick={() => p.kind === 'module' && onEditModule(p)}>
               <button
@@ -472,8 +477,8 @@
                 <span class="summary">{p.kind === 'module' ? summary(p.body) : stripNewline(p.source).split('\n')[0]}</span>
               {/if}
               <span class="spacer"></span>
-              {#if pages?.[p.id] && pages[p.id][1] > pages[p.id][0]}
-                <span class="pages" title="Dieser Abschnitt geht im PDF über mehrere Seiten">S. {pages[p.id][0]}–{pages[p.id][1]}</span>
+              {#if pages?.[p.id] && pages[p.id].range[1] > pages[p.id].range[0]}
+                <span class="pages" title="Dieser Abschnitt geht im PDF über mehrere Seiten">S. {pages[p.id].range[0]}–{pages[p.id].range[1]}</span>
               {/if}
             </header>
             {#each notices(p) as n}
@@ -522,6 +527,25 @@
     padding: 6px 18px 40px 6px;
     background: var(--panel-2);
     scrollbar-gutter: stable;
+  }
+  .inbreak {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px dashed var(--line-strong);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .inbreak span {
+    position: absolute;
+    right: 8px;
+    top: -8px;
+    font: 9.5px var(--ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--panel);
+    padding: 0 4px;
   }
   .pagebreak {
     display: flex;
@@ -642,6 +666,7 @@
   }
 
   .frame {
+    position: relative;
     min-width: 0;
     container: part / inline-size;
     background: var(--panel);

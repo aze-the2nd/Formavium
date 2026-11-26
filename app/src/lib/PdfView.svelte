@@ -51,6 +51,15 @@
 
   /** Alle Seiten neu zeichnen und dann austauschen (kein Flackern). */
   async function render() {
+    try {
+      await draw();
+    } catch (e) {
+      // Ein neuerer Zeichenlauf hat diesen abgelöst: kein Fehler.
+      if ((e as { name?: string })?.name !== 'RenderingCancelledException') console.warn('PDF-Vorschau:', e);
+    }
+  }
+
+  async function draw() {
     if (!pdf || !pagesEl) return;
     const token = ++renderToken;
     const keep = topPoint();

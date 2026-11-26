@@ -16,22 +16,34 @@ entsteht dieser Ordner von selbst.
 - **Visuell:** Module sehen aus wie im Dokument und werden direkt bearbeitet.
   Es gibt kaum Schaltflächen: Einfügestellen erscheinen beim Überfahren,
   alles Weitere liegt im Rechtsklick-Menü und auf Tastenkürzeln.
-  - *Tabelle:* Plus unter der letzten Zeile, am linken Rand zwischen Zeilen
-    und über einer Spaltengrenze. Spalten am Kopf ziehen, Doppelklick benennt
-    um. Ergänzte, entfernte und umbenannte Spalten gelten nur für diese
+  - *Tabelle:* bedient wie eine Tabellenkalkulation. Zellen wählen,
+    Bereiche ziehen oder mit Umschalt+Pfeil markieren, Tippen überschreibt,
+    Entf leert, Strg+C/V kopiert und setzt Blöcke ein (auch aus Excel oder
+    Word). Rechtsklick verbindet Zellen, macht eine Spalte zur LaTeX-Spalte
+    (Indizes, Formeln, Farben) oder richtet sie aus. Beim Überfahren einer
+    Zeilen- oder Spaltengrenze erscheint ein Plus zum Einfügen. Drei
+    Bearbeitungsarten, umschaltbar im Kopf der Ansicht: direkt in der Zelle,
+    Raster mit Spaltenbuchstaben und Eingabezeile, Zelleditor mit Vorschau.
+    Ergänzte, entfernte und umbenannte Spalten gelten nur für diese
     Verwendung des Moduls.
-    Kopierte Zellen aus Excel oder Word füllen die Tabelle ab der
-    markierten Zelle und legen fehlende Zeilen an.
   - *Liste:* Eingabe legt den nächsten Punkt an, Rücktaste im leeren Punkt
     entfernt ihn.
   - *Bild:* anklicken, hineinziehen oder mit Strg+V einfügen.
   - *Abschnitte:* am Griff ziehen oder mit Strg+↑/↓ verschieben, Plus
     zwischen den Abschnitten fügt ein.
-- **PDF:** bei Fehlern bleibt der letzte gute Stand sichtbar und ist als
-  älter markiert; Diagnosen springen zur Stelle. „Als PDF speichern“ schreibt
-  genau die angezeigten Bytes.
+- **PDF:** Ein Klick springt zur Stelle im Editor (SyncTeX), die gewählte
+  Stelle des Editors ist im PDF markiert. Bei Fehlern bleibt der letzte gute
+  Stand sichtbar und ist als älter markiert; Diagnosen springen zur Stelle.
+  „Als PDF speichern“ schreibt genau die angezeigten Bytes.
 - **Ansichten:** Kacheln am Griff umordnen, Trennlinien ziehen, mit
-  Strg+1/2/3 ein- und ausblenden. Die Anordnung bleibt erhalten.
+  Strg+1/2/3 ein- und ausblenden. Die Anordnung bleibt erhalten. Die
+  Ansichten scrollen synchron; der visuelle Editor zeigt, wo im PDF eine
+  neue Seite beginnt.
+- **Nerd-Modus:** Ein freies LaTeX-Dokument ist reiner Quelltext mit
+  PDF-Vorschau, ohne Module und ohne Schutz (Vorlage „Freies LaTeX“ oder
+  Datei → Als freies LaTeX weiterführen, eine Kopie). Geführte Dokumente
+  bleiben geschützt. Die Vervollständigung im Quelltext kennt LaTeX-Befehle
+  und die Befehle der eigenen Vorlagen; Strg+Umschalt+L schlägt sie nach.
 - **Befehle:** Menüleiste und Befehlspalette (Strg+K) zeigen dieselben
   Befehle. Die Palette findet auch Module, Vorlagen und zuletzt geöffnete
   Dokumente. **F1** zeigt alle Tastenkürzel.
@@ -74,6 +86,10 @@ Feldmarken im LaTeX-Quelltext eines Moduls:
 | `\feld{name}` | Text des Anwenders, automatisch maskiert |
 | `\rohfeld{name}` | LaTeX des Anwenders, unverändert (Formeln, Sonderzeichen) |
 | `\bildfeld[optionen]{name}` | Bild, ohne Auswahl ein Platzhalter |
+
+Braucht ein Modul eigene Pakete oder Befehle, gehören sie in seinen
+**Vorspann** (Modul-Werkstatt). Mit `\providecommand` definiert, kann eine
+Vorlage sie vorgeben, und das Modul funktioniert in jedem Dokument.
 
 ## Updates und Feedback
 
@@ -182,6 +198,7 @@ damit Datei-Drops aus dem Explorer (Bilder) im selben Fenster funktionieren.
   Standardbenutzer, ohne Netz, mit und ohne WebView2-Runtime).
 - Keine Code-Signatur (SmartScreen-Warnung beim Start des Installers).
 - Untermodule in der Werkstatt, Modulupdates mit Abgleich lokaler Änderungen.
+- Vollständige Referenz der LaTeX-Befehle in der App.
 
 ## Lizenz
 
