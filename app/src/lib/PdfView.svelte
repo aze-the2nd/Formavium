@@ -88,22 +88,44 @@
       wraps.push(wrap);
     }
     pagesEl.replaceChildren(...wraps);
-    drawMarks();
+    // Neu gezeichnete Seiten: vorhandene Markierungen ohne Einblenden.
+    drawMarks(false);
     if (keep) scrollToPoint(keep.page, keep.y, false);
   }
 
-  function drawMarks() {
+  /**
+   * Markierungen abgleichen statt neu aufbauen: Eine Stelle, die schon
+   * markiert ist, bleibt stehen (kein erneutes Einblenden, kein Flackern),
+   * nur neue Stellen blenden ein.
+   */
+  function drawMarks(fade = true) {
     if (!pagesEl) return;
-    for (const layer of pagesEl.querySelectorAll<HTMLElement>('.marks')) layer.replaceChildren();
+    const wanted = new Map<string, { page: number; left: number; top: number; width: number; height: number }>();
     for (const [page, x, y, w, h] of marks) {
-      const layer = pagesEl.querySelector<HTMLElement>(`.page-wrap[data-page="${page}"] .marks`);
+      const r = {
+        page,
+        left: Math.round((x - 2) * scale),
+        top: Math.round((y - 1.5) * scale),
+        width: Math.round((w + 4) * scale),
+        height: Math.round((h + 3) * scale),
+      };
+      wanted.set(`${page}:${r.left}:${r.top}:${r.width}:${r.height}`, r);
+    }
+    for (const m of pagesEl.querySelectorAll<HTMLElement>('.mark')) {
+      const key = m.dataset.key!;
+      if (wanted.has(key)) wanted.delete(key);
+      else m.remove();
+    }
+    for (const [key, r] of wanted) {
+      const layer = pagesEl.querySelector<HTMLElement>(`.page-wrap[data-page="${r.page}"] .marks`);
       if (!layer) continue;
       const m = document.createElement('div');
-      m.className = 'mark';
-      m.style.left = `${(x - 2) * scale}px`;
-      m.style.top = `${(y - 1.5) * scale}px`;
-      m.style.width = `${(w + 4) * scale}px`;
-      m.style.height = `${(h + 3) * scale}px`;
+      m.className = fade ? 'mark fade' : 'mark';
+      m.dataset.key = key;
+      m.style.left = `${r.left}px`;
+      m.style.top = `${r.top}px`;
+      m.style.width = `${r.width}px`;
+      m.style.height = `${r.height}px`;
       layer.append(m);
     }
   }
@@ -402,6 +424,8 @@
     border-radius: 2px;
     background: rgba(47, 111, 223, 0.16);
     box-shadow: 0 0 0 1.5px rgba(47, 111, 223, 0.75);
+  }
+  .pages :global(.mark.fade) {
     animation: mark-in 0.18s ease-out;
   }
   @keyframes -global-mark-in {

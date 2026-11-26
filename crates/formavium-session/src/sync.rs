@@ -1,5 +1,6 @@
 //! Zuordnung zwischen angezeigtem PDF und Dokument über SyncTeX.
 
+use formavium_core::latex::Span;
 use formavium_core::latex::{line_start, Origin};
 use formavium_core::Generated;
 use formavium_render::{SyncBox, SyncMap};
@@ -26,18 +27,31 @@ fn line_end(text: &str, start: usize) -> usize {
     text[start..].find('\n').map_or(text.len(), |i| start + i)
 }
 
-/// Spaltenindex einer Zelle in ihrer Tabellenzeile: Anzahl der `&` vor ihr,
-/// die nicht zum Inhalt einer Zelle gehören.
-fn column_index(g: &Generated, start: usize, line_from: usize) -> usize {
-    let inside = |pos: usize| {
-        g.spans
+fn is_input(o: &Origin) -> bool {
+    matches!(o, Origin::Field { .. } | Origin::Cell { .. })
+}
+
+/// Stelle eines Eingabebereichs in seiner gesetzten Tabellenzeile: bei
+/// Zellen direkt bekannt, bei Feldern (Tabellen aus Einzelfeldern in
+/// LaTeX-Modulen) die Reihenfolge der Felder auf der Zeile, sofern sie
+/// zur Zahl der Zellen im PDF passt.
+fn cell_rank(g: &Generated, span: &Span, from: usize, to: usize, cells: usize) -> Option<usize> {
+    if let Origin::Cell { index, .. } = span.origin {
+        return Some(index);
+    }
+    let on_line: Vec<&Span> = g
+        .spans
+        .iter()
+        .filter(|s| s.start >= from && s.start <= to && is_input(&s.origin))
+        .collect();
+    if on_line.len() != cells
+        || on_line
             .iter()
-            .any(|s| matches!(s.origin, Origin::Cell { .. }) && s.start <= pos && pos < s.end)
-    };
-    g.text[line_from..start]
-        .char_indices()
-        .filter(|(i, c)| *c == '&' && !inside(line_from + i))
-        .count()
+            .any(|s| matches!(s.origin, Origin::Cell { .. }))
+    {
+        return None;
+    }
+    on_line.iter().position(|s| std::ptr::eq(*s, span))
 }
 
 fn origin_json(origin: &Origin) -> Json {
@@ -51,6 +65,7 @@ fn origin_json(origin: &Origin) -> Json {
             path,
             row,
             column,
+            ..
         } => json!({ "kind": "cell", "part": part, "path": path, "row": row, "column": column }),
     }
 }
@@ -68,10 +83,11 @@ pub fn locate(g: &Generated, map: &SyncMap, page: u32, x: f32, y: f32) -> Option
             if cells.len() < 2 {
                 continue;
             }
-            let Some(k) = cells
-                .iter()
-                .position(|b| (b.x - hit.x).abs() < 0.01 && (b.w - hit.w).abs() < 0.01)
-            else {
+            let Some(k) = cells.iter().position(|b| {
+                (b.x - hit.x).abs() < 0.01
+                    && (b.y - hit.y).abs() < 0.01
+                    && (b.w - hit.w).abs() < 0.01
+            }) else {
                 continue;
             };
             let Some(from) = line_start(&g.text, candidate) else {
@@ -81,9 +97,8 @@ pub fn locate(g: &Generated, map: &SyncMap, page: u32, x: f32, y: f32) -> Option
             origin = g
                 .spans
                 .iter()
-                .filter(|s| s.start >= from && s.start <= to)
-                .filter(|s| matches!(s.origin, Origin::Cell { .. }))
-                .find(|s| column_index(g, s.start, from) == k)
+                .filter(|s| s.start >= from && s.start <= to && is_input(&s.origin))
+                .find(|s| cell_rank(g, s, from, to, cells.len()) == Some(k))
                 .map(|s| &s.origin);
             if origin.is_some() {
                 line = candidate;
@@ -121,6 +136,7 @@ fn matches(origin: &Origin, t: &Target) -> bool {
             path,
             row,
             column,
+            ..
         } => {
             part.as_str() == t.part
                 && t.path.as_deref() == Some(path.as_str())
@@ -172,11 +188,16 @@ pub fn highlight(g: &Generated, map: &SyncMap, targets: &[Target]) -> Vec<Rect> 
             continue;
         }
         for span in g.spans.iter().filter(|s| matches(&s.origin, t)) {
+            // Leeres Feld: im PDF steht nichts. Die Boxen dieser Zeile
+            // gehören dann oft zur Tabellenzeile davor.
+            if span.start == span.end {
+                continue;
+            }
             let line = g.line_of(span.start);
             let last = g.line_of(span.end.saturating_sub(1).max(span.start));
-            if matches!(span.origin, Origin::Cell { .. }) && line == last {
+            if line == last {
                 let from = line_start(&g.text, line).unwrap_or(0);
-                let k = column_index(g, span.start, from);
+                let to = line_end(&g.text, from);
                 let pages: Vec<u32> = {
                     let mut p: Vec<u32> = map
                         .boxes
@@ -191,7 +212,9 @@ pub fn highlight(g: &Generated, map: &SyncMap, targets: &[Target]) -> Vec<Rect> 
                 for page in pages {
                     let cells = map.cells(page, line);
                     if cells.len() > 1 {
-                        if let Some(b) = cells.get(k) {
+                        if let Some(b) =
+                            cell_rank(g, span, from, to, cells.len()).and_then(|k| cells.get(k))
+                        {
                             rects.extend(union(&[b]));
                             found = true;
                         }

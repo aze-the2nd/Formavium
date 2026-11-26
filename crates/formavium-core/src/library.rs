@@ -460,10 +460,36 @@ fn validate_body<'a>(
                 columns,
                 rows,
                 caption,
+                latex,
             } => {
                 field_of(rows, &[FieldKind::Table], "Die Tabelle")?;
                 if columns.is_empty() {
                     return Err("Eine Tabelle braucht mindestens eine Spalte".into());
+                }
+                if let Some(t) = latex {
+                    if columns.len() > 9 {
+                        return Err("Eine Tabelle mit eigenem Satz hat höchstens 9 Spalten".into());
+                    }
+                    if t.row.trim().is_empty() {
+                        return Err("Der Zeilensatz der Tabelle ist leer".into());
+                    }
+                    let mut rest = t.row.as_str();
+                    while let Some(at) = rest.find('#') {
+                        let after = &rest[at + 1..];
+                        match after.chars().next() {
+                            Some('#') => rest = &after[1..],
+                            Some(d @ '1'..='9') => {
+                                if d as usize - '0' as usize > columns.len() {
+                                    return Err(format!(
+                                        "Der Zeilensatz nennt #{d}, die Tabelle hat aber nur {} Spalten",
+                                        columns.len()
+                                    ));
+                                }
+                                rest = &after[1..];
+                            }
+                            _ => rest = after,
+                        }
+                    }
                 }
                 let mut ids = BTreeSet::new();
                 for c in columns {

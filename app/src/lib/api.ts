@@ -30,7 +30,7 @@ export type LatexField = {
 export type El =
   | { kind: 'heading'; level: number; text: string; field: string | null; numeric: boolean }
   | { kind: 'paragraph'; text: string; field: string | null; numeric: boolean }
-  | { kind: 'table'; path: string; rows_path: string; caption: string | null; columns: Col[]; rows: RowView[] }
+  | { kind: 'table'; path: string; rows_path: string; caption: string | null; columns: Col[]; rows: RowView[]; fixed: boolean }
   | { kind: 'image'; field: string; value: string | null; width: number }
   | { kind: 'list'; path: string; ordered: boolean; items: { id: string; text: string }[] }
   | { kind: 'row'; children: El[] }

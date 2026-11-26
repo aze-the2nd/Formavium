@@ -252,6 +252,7 @@ fn diagnostics_map_lines_to_fields_and_parts() {
             path: "zeilen".into(),
             row: "r1".into(),
             column: "bez".into(),
+            index: 0,
         })
     );
     let title = g.text.find("Material für").unwrap();

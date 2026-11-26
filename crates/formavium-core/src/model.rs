@@ -244,6 +244,9 @@ pub enum ElementKind {
         rows: Id,
         #[serde(default)]
         caption: Option<Text>,
+        /// Eigener Satz statt des Standardgitters, etwa für ein Firmenlayout.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latex: Option<TableLatex>,
     },
     Image {
         /// Bildfeld mit dem relativen Pfad.
@@ -283,6 +286,21 @@ pub const LIST_COLUMN: &str = "text";
 pub enum Text {
     Literal(String),
     Field(Id),
+}
+
+/// Eigener LaTeX-Satz einer Tabelle. Die Spalten stehen fest; Zeilen
+/// werden wie gewohnt eingefügt, verschoben und verbunden.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TableLatex {
+    /// Vor der ersten Zeile, etwa `\begin{tabular}{|l|l|}`.
+    #[serde(default)]
+    pub begin: String,
+    /// Eine Zeile. `#1` bis `#9` stehen für die Zellen in Spaltenfolge,
+    /// `##` für ein `#`. Die Fortsetzung einer verbundenen Zelle ist leer.
+    pub row: String,
+    /// Nach der letzten Zeile.
+    #[serde(default)]
+    pub end: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

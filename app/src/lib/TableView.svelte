@@ -325,8 +325,8 @@
     let handled = true;
     if (e.altKey && e.key === 'ArrowUp') moveRow(-1);
     else if (e.altKey && e.key === 'ArrowDown') moveRow(1);
-    else if (e.altKey && e.key === 'ArrowLeft' && anchor) moveColumn(anchor.c, anchor.c - 1);
-    else if (e.altKey && e.key === 'ArrowRight' && anchor) moveColumn(anchor.c, anchor.c + 1);
+    else if (e.altKey && e.key === 'ArrowLeft' && anchor && !t.fixed) moveColumn(anchor.c, anchor.c - 1);
+    else if (e.altKey && e.key === 'ArrowRight' && anchor && !t.fixed) moveColumn(anchor.c, anchor.c + 1);
     else if (!mod && /^(Arrow|Home$|End$)/.test(e.key)) move(e.key, e.shiftKey);
     else if (e.key === 'Enter' && mod && anchor) insertRow(e.shiftKey ? anchor.r : spanEnd(anchor.r, anchor.c) + 1);
     else if (e.key === 'Backspace' && mod && e.shiftKey) removeRows();
@@ -446,6 +446,16 @@
 
   function columnItems(c: number): MenuItem[] {
     const col = t.columns[c];
+    if (t.fixed) {
+      return [
+        { heading: `Spalte ${letter(c)} · ${col.header}` },
+        {
+          label: 'Zellen enthalten LaTeX',
+          checked: col.latex,
+          action: () => style(col, { latex: !col.latex }),
+        },
+      ];
+    }
     return [
       { heading: `Spalte ${letter(c)} · ${col.header}` },
       { label: 'Spalte links einfügen', action: () => insertColumn(c) },
@@ -502,11 +512,14 @@
     const tb = table.getBoundingClientRect();
     const body = table.tBodies[0];
     const rows = Array.from(body.rows).filter((tr) => tr.dataset.row !== undefined);
-    const head = table.tHead!.rows[table.tHead!.rows.length - 1];
-    const cells = Array.from(head.cells).filter((c) => c.dataset.col !== undefined);
+    // Spaltenkanten aus der ersten Zeile (sie hat nie verbundene Zellen),
+    // ohne Zeilen aus dem Kopf.
+    const ref = rows[0] ?? table.tHead?.querySelector<HTMLTableRowElement>('tr.head');
+    if (!ref) return;
+    const cells = Array.from(ref.cells).filter((c) => c.dataset.c !== undefined || c.dataset.col !== undefined);
     if (!cells.length) return;
     const left = cells[0].getBoundingClientRect().left;
-    const top = head.getBoundingClientRect().bottom;
+    const top = rows.length ? rows[0].getBoundingClientRect().top : ref.getBoundingClientRect().bottom;
     const bottom = rows.length ? rows[rows.length - 1].getBoundingClientRect().bottom : top;
     box = { left: left - f.left + frame.scrollLeft, top: tb.top - f.top, width: tb.right - left, height: bottom - tb.top };
     const x = e.clientX;
@@ -526,7 +539,7 @@
       const edges = [top, ...rows.map((tr) => tr.getBoundingClientRect().bottom)];
       edges.forEach((edge, index) => consider({ axis: 'row', index, edge: edge - f.top, along: x - f.left + frame!.scrollLeft }, Math.abs(y - edge)));
     }
-    if (y >= tb.top - 16 && y <= bottom + 16) {
+    if (!t.fixed && y >= tb.top - 16 && y <= bottom + 16) {
       const edges = [left, ...cells.map((c) => c.getBoundingClientRect().right)];
       edges.forEach((edge, index) =>
         consider({ axis: 'col', index, edge: edge - f.left + frame!.scrollLeft, along: y - f.top }, Math.abs(x - edge)),
@@ -562,6 +575,21 @@
     }
   }
 
+  /** Ränder eines markierten Bereichs, wie im Mockup betont. */
+  function edges(r: number, c: number) {
+    if (!bounds || !isRange || !focused || !inRange(r, c)) return '';
+    let out = '';
+    if (r <= bounds.r0) out += ' e-top';
+    if (spanEnd(r, c) >= bounds.r1) out += ' e-bottom';
+    if (c === bounds.c0) out += ' e-left';
+    if (c === bounds.c1) out += ' e-right';
+    return out;
+  }
+  /** Erste Textspalte: Merkmal einer Zeile, etwas kräftiger gesetzt. */
+  let labelCol = $derived(t.fixed && t.columns.length > 1 && !t.columns[0].latex ? 0 : -1);
+  let width = (c: Col, i: number) =>
+    c.width ? `${Math.round(c.width * 1000) / 10}%` : i === labelCol && t.columns.length === 2 ? '40%' : null;
+
   const headerLabel = (c: Col) => (c.unit && c.unit_placement === 'header' ? ` [${c.unit}]` : '');
   let grid = $derived(editor.tableMode === 'grid');
 </script>
@@ -583,7 +611,6 @@
   oncut={(e) => onCopy(e, true)}
   onpaste={onPaste}
 >
-  {#if t.caption}<div class="caption">{t.caption}</div>{/if}
   {#if grid}
     <label class="formula">
       <span class="coord">{anchor && focused ? address(anchor) : '–'}</span>
@@ -602,61 +629,69 @@
     <table bind:this={table} aria-label={t.caption ?? 'Tabelle'} aria-multiselectable="true" role="grid">
       <colgroup>
         {#if grid}<col class="numcol" />{/if}
-        {#each t.columns as c (c.id)}<col style:width={c.width ? `${Math.round(c.width * 100)}%` : null} />{/each}
+        {#each t.columns as c, i (c.id)}<col style:width={width(c, i)} />{/each}
       </colgroup>
       <thead>
+        {#if t.caption}
+          <tr>
+            {#if grid}<th class="corner"></th>{/if}
+            <th class="section" colspan={t.columns.length}>{t.caption}</th>
+          </tr>
+        {/if}
         {#if grid}
           <tr class="letters">
             <th class="corner"></th>
             {#each t.columns as c, i (c.id)}
-              <th class:current={focused && !!bounds && i >= bounds.c0 && i <= bounds.c1}>
-                <button tabindex="-1" onclick={() => selectColumn(i)} aria-label="Spalte {letter(i)} auswählen">{letter(i)}</button>
+              <th class:current={focused && !!bounds && i >= bounds.c0 && i <= bounds.c1} title={c.header}>
+                <button tabindex="-1" onclick={() => selectColumn(i)} aria-label="Spalte {letter(i)} · {c.header} auswählen">{letter(i)}</button>
               </th>
             {/each}
           </tr>
         {/if}
-        <tr class="head">
-          {#if grid}<th class="corner"></th>{/if}
-          {#each t.columns as c, i (c.id)}
-            <th
-              data-col={i}
-              style:text-align={c.align}
-              class:over={colDrag?.active && colDrag.over === i && colDrag.from !== i}
-              class:moving={colDrag?.active && colDrag.from === i}
-              title="Klick wählt die Spalte, Ziehen verschiebt sie, Doppelklick benennt um"
-              onpointerdown={(e) => headDown(e, i)}
-              onpointermove={headMove}
-              onpointerup={headUp}
-              onpointercancel={() => (colDrag = null)}
-              ondblclick={() => (renaming = c.id)}
-              oncontextmenu={(e) => {
-                e.preventDefault();
-                selectColumn(i);
-                openMenu({ x: e.clientX, y: e.clientY }, columnItems(i));
-              }}
-            >
-              {#if renaming === c.id}
-                <EditableText
-                  value={c.header}
-                  label="Spaltenkopf"
-                  autofocus
-                  onCommit={(v: string) => setHeader(c.id, v)}
-                  onBlur={() => (renaming = null)}
-                  onKey={(e: KeyboardEvent) => {
-                    e.stopPropagation();
-                    if (e.key === 'Enter' || e.key === 'Escape') {
-                      e.preventDefault();
-                      renaming = null;
-                    }
-                  }}
-                  onpointerdown={(e: PointerEvent) => e.stopPropagation()}
-                />
-              {:else}
-                {c.header}<span class="unit">{headerLabel(c)}</span>{#if c.latex}<span class="tex" title="Zellen enthalten LaTeX">TeX</span>{/if}
-              {/if}
-            </th>
-          {/each}
-        </tr>
+        {#if !t.fixed}
+          <tr class="head">
+            {#if grid}<th class="corner"></th>{/if}
+            {#each t.columns as c, i (c.id)}
+              <th
+                data-col={i}
+                style:text-align={c.align}
+                class:over={colDrag?.active && colDrag.over === i && colDrag.from !== i}
+                class:moving={colDrag?.active && colDrag.from === i}
+                title="Klick wählt die Spalte, Ziehen verschiebt sie, Doppelklick benennt um"
+                onpointerdown={(e) => headDown(e, i)}
+                onpointermove={headMove}
+                onpointerup={headUp}
+                onpointercancel={() => (colDrag = null)}
+                ondblclick={() => (renaming = c.id)}
+                oncontextmenu={(e) => {
+                  e.preventDefault();
+                  selectColumn(i);
+                  openMenu({ x: e.clientX, y: e.clientY }, columnItems(i));
+                }}
+              >
+                {#if renaming === c.id}
+                  <EditableText
+                    value={c.header}
+                    label="Spaltenkopf"
+                    autofocus
+                    onCommit={(v: string) => setHeader(c.id, v)}
+                    onBlur={() => (renaming = null)}
+                    onKey={(e: KeyboardEvent) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter' || e.key === 'Escape') {
+                        e.preventDefault();
+                        renaming = null;
+                      }
+                    }}
+                    onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+                  />
+                {:else}
+                  {c.header}<span class="unit">{headerLabel(c)}</span>{#if c.latex}<span class="tex" title="Zellen enthalten LaTeX">TeX</span>{/if}
+                {/if}
+              </th>
+            {/each}
+          </tr>
+        {/if}
       </thead>
       <tbody>
         {#each t.rows as row, r (row.id)}
@@ -671,14 +706,17 @@
                 {@const span = spanEnd(r, ci) - r + 1}
                 {@const isAnchor = focused && !!anchor && anchor.r === r && anchor.c === ci}
                 {@const chosen = focused && inRange(r, ci)}
+                {@const isEditing = !!editing && editing.row === row.id && editing.col === c.id}
                 <td
                   rowspan={span > 1 ? span : undefined}
                   data-r={r}
                   data-c={ci}
                   tabindex={isAnchor || (!focused && r === 0 && ci === 0) ? 0 : -1}
+                  class={edges(r, ci)}
                   class:selected={chosen && isRange}
                   class:anchor={isAnchor}
-                  class:latex={c.latex}
+                  class:label={ci === labelCol}
+                  class:editing={isEditing}
                   style:text-align={c.align}
                   aria-label="{c.header}, Zeile {r + 1}{row.cells[ci] ? '' : ', leer'}"
                   aria-selected={chosen}
@@ -688,7 +726,7 @@
                   onkeydown={cellKey}
                   oncontextmenu={(e) => cellMenu(e, r, ci)}
                 >
-                  {#if editing && editing.row === row.id && editing.col === c.id}
+                  {#if isEditing && editing}
                     <input
                       class="cell-input"
                       class:mono={c.latex}
@@ -705,13 +743,15 @@
                     {#if c.latex}{@html texPreview(row.cells[ci])}{:else}{row.cells[ci]}{/if}{#if c.unit && c.unit_placement === 'value'}<span
                         class="unit">&nbsp;{c.unit}</span
                       >{/if}
+                  {:else}
+                    <span class="empty">…</span>
                   {/if}
                 </td>
               {/if}
             {/each}
           </tr>
         {:else}
-          <tr class="empty">
+          <tr class="none">
             <td colspan={t.columns.length + (grid ? 1 : 0)}>
               <button onclick={() => insertRow(0)}>Noch keine Zeilen – klicken, um die erste anzulegen</button>
             </td>
@@ -738,56 +778,74 @@
       >
     {/if}
   </div>
-  {#if focused}
-    <div class="foot">
-      <button class="quiet" onclick={() => insertRow(t.rows.length)}>＋ Zeile</button>
-      <button class="quiet" onclick={() => insertColumn(t.columns.length)}>＋ Spalte</button>
-      <span class="hint">
-        {#if isRange && bounds}
-          {bounds.r1 - bounds.r0 + 1} × {bounds.c1 - bounds.c0 + 1} Zellen · Strg+C kopiert, Entf leert
-        {:else if editor.tableMode === 'inspector'}
-          Eingabe bearbeitet die Zelle unten im Zelleditor
-        {:else}
-          Tippen oder Doppelklick bearbeitet · Umschalt+Pfeil markiert
-        {/if}
-      </span>
-    </div>
-  {/if}
+  <div class="foot">
+    <button class="add" onclick={() => insertRow(t.rows.length)}>＋ Zeile</button>
+    {#if !t.fixed}<button class="add" onclick={() => insertColumn(t.columns.length)}>＋ Spalte</button>{/if}
+    <span class="hint">
+      {#if !focused}
+        <!-- leer -->
+      {:else if isRange && bounds}
+        {bounds.r1 - bounds.r0 + 1} × {bounds.c1 - bounds.c0 + 1} Zellen · Strg+C kopiert, Entf leert
+      {:else if editor.tableMode === 'inspector'}
+        Zelle anklicken und unten bearbeiten
+      {:else if grid}
+        Ziehen oder Umschalt+Pfeiltasten zum Markieren
+      {:else}
+        Doppelklick oder Eingabe zum Bearbeiten
+      {/if}
+    </span>
+  </div>
 </div>
 
 <style>
   .tv {
     font-family: var(--ui);
-    margin: 4px 0 10px;
-  }
-  .caption {
-    font-weight: 600;
-    margin-bottom: 6px;
+    margin: 2px 0 4px;
   }
   .frame {
     position: relative;
     overflow-x: auto;
-    padding: 2px;
     scrollbar-width: thin;
   }
   table {
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed;
     width: 100%;
     font-size: 13px;
-    table-layout: auto;
+    border-left: 1px solid var(--grid-line);
+    border-top: 1px solid var(--grid-line);
+    user-select: none;
   }
   th,
   td {
-    border: 1px solid var(--grid-line);
+    border-right: 1px solid var(--grid-line);
+    border-bottom: 1px solid var(--grid-line);
+    text-align: left;
+  }
+  .section {
+    padding: 10px 11px;
+    font-size: 16px;
+    font-weight: 670;
+    letter-spacing: -0.012em;
+    background: var(--grid-section);
+    color: var(--text);
+  }
+  .grid .section {
+    font-size: 15px;
+    padding: 7px 11px;
   }
   .head th {
     position: relative;
+    height: 32px;
+    padding: 6px 11px;
     font-weight: 600;
-    padding: 5px 9px;
+    font-size: 12px;
     background: var(--grid-head);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: var(--cur-grab);
-    user-select: none;
   }
   .head th:hover {
     background: var(--grid-head-hover);
@@ -811,33 +869,63 @@
     vertical-align: 1px;
   }
   td {
-    height: 30px;
-    padding: 4px 9px;
+    height: 36px;
+    padding: 7px 11px;
     line-height: 1.35;
     position: relative;
     vertical-align: middle;
     cursor: var(--cur-cell);
     outline: none;
-    user-select: none;
     overflow-wrap: anywhere;
   }
+  .grid td {
+    height: 31px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+  td.label {
+    font-weight: 540;
+    color: var(--grid-label);
+  }
   td:hover {
-    background: var(--field-hover);
+    background: var(--grid-hover);
   }
   td.selected {
     background: var(--sel-bg);
   }
-  td.anchor {
+  td.e-top {
+    box-shadow: inset 0 1px var(--sel-edge);
+  }
+  td.e-left {
+    box-shadow: inset 1px 0 var(--sel-edge);
+  }
+  td.e-top.e-left {
+    box-shadow:
+      inset 0 1px var(--sel-edge),
+      inset 1px 0 var(--sel-edge);
+  }
+  td.e-right {
+    border-right-color: var(--sel-edge);
+  }
+  td.e-bottom {
+    border-bottom-color: var(--sel-edge);
+  }
+  td.anchor,
+  td.anchor.e-top,
+  td.anchor.e-left {
     box-shadow: inset 0 0 0 2px var(--accent);
     background: var(--sel-anchor);
+    z-index: 1;
   }
-  td.latex {
-    font-family: var(--serif);
-    font-size: 14px;
+  td.editing {
+    overflow: visible;
   }
   td :global(sub),
   td :global(sup) {
-    font-size: 0.72em;
+    font-size: 0.7em;
+  }
+  .empty {
+    color: var(--muted);
   }
   .cell-input {
     position: absolute;
@@ -847,12 +935,13 @@
     min-width: 0;
     font: inherit;
     color: var(--text);
-    background: var(--panel);
+    background: var(--cell-edit);
     border: 2px solid var(--accent);
-    padding: 3px 7px;
+    padding: 4px 9px;
     outline: none;
     text-align: inherit;
     user-select: text;
+    z-index: 2;
   }
   .cell-input.mono {
     font-family: var(--mono);
@@ -861,30 +950,28 @@
 
   /* Raster: Spaltenbuchstaben und Zeilennummern. */
   .numcol {
-    width: 30px;
+    width: 32px;
   }
   .letters th,
   .num,
   .corner {
+    height: 25px;
     background: var(--grid-index);
     color: var(--muted);
-    font: 10.5px var(--mono);
-    font-weight: 400;
+    font: 11px var(--mono);
     padding: 0;
     text-align: center;
-  }
-  .letters th {
-    height: 20px;
   }
   .letters button,
   .num button {
     width: 100%;
     height: 100%;
-    min-height: 20px;
+    min-height: 24px;
     border: none;
     background: none;
     color: inherit;
     font: inherit;
+    padding: 4px 0;
     cursor: pointer;
   }
   .letters button:hover,
@@ -893,49 +980,48 @@
     background: var(--grid-head-hover);
   }
   .current {
-    background: var(--sel-bg) !important;
+    background: var(--sel-anchor) !important;
     color: var(--accent-strong) !important;
   }
   .formula {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 0 2px 6px;
+    margin: 0 0 8px;
   }
   .coord {
-    min-width: 34px;
+    min-width: 36px;
     font: 11px var(--mono);
     color: var(--accent-strong);
     text-align: center;
   }
   .fx {
-    font: italic 13px var(--serif);
+    font: italic 13px Georgia, serif;
     color: var(--muted);
   }
   .formula input {
     flex: 1;
     min-width: 0;
-    height: 26px;
+    height: 28px;
     font: 12px var(--mono);
     color: var(--text);
-    background: var(--panel);
+    background: var(--cell-edit);
     border: 1px solid var(--line-strong);
-    border-radius: 5px;
-    padding: 3px 8px;
+    border-radius: 4px;
+    padding: 4px 8px;
   }
   .formula input:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
+    outline: 1px solid var(--accent);
   }
   .formula input:disabled {
     opacity: 0.5;
   }
 
-  .empty td {
+  .none td {
     padding: 0;
     cursor: default;
   }
-  .empty button {
+  .none button {
     width: 100%;
     font: inherit;
     font-size: 12px;
@@ -950,36 +1036,34 @@
     position: absolute;
     background: var(--accent);
     pointer-events: none;
-    z-index: 2;
+    z-index: 3;
   }
   .guide.h {
-    height: 2px;
-    transform: translateY(-1px);
+    height: 1px;
   }
   .guide.v {
-    width: 2px;
-    transform: translateX(-1px);
+    width: 1px;
   }
   .insert {
     position: absolute;
-    z-index: 3;
+    z-index: 4;
     transform: translate(-50%, -50%);
     width: 20px;
     height: 20px;
     display: grid;
     place-items: center;
-    padding: 0 0 1px;
+    padding: 0;
     border-radius: 50%;
-    border: 2px solid var(--panel);
+    border: 1px solid var(--accent-strong);
     background: var(--accent);
     color: white;
-    font: 600 14px/1 var(--ui);
+    font: 17px/1 system-ui, sans-serif;
     cursor: pointer;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 2px 7px rgba(9, 14, 25, 0.6);
     animation: pop 0.1s ease-out;
   }
   .insert:hover {
-    background: var(--accent-strong);
+    filter: brightness(1.15);
   }
   @keyframes pop {
     from {
@@ -988,25 +1072,30 @@
     }
   }
   .foot {
+    min-height: 34px;
     display: flex;
     align-items: center;
-    gap: 4px;
-    margin-top: 4px;
+    gap: 2px;
+    padding-top: 4px;
     font-size: 11px;
     color: var(--muted);
   }
-  .quiet {
+  .add {
     font: inherit;
-    color: var(--accent-strong);
-    background: none;
+    min-height: 26px;
+    padding: 5px 8px;
+    color: var(--text);
+    background: transparent;
     border: 1px solid transparent;
-    border-radius: 5px;
-    padding: 2px 6px;
+    border-radius: 6px;
     cursor: pointer;
   }
-  .quiet:hover {
+  .active .add {
     border-color: var(--line);
-    background: var(--panel-2);
+  }
+  .add:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
   }
   .hint {
     margin-left: auto;

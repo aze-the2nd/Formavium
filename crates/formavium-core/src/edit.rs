@@ -198,6 +198,8 @@ pub enum EditError {
     UnknownColumn(Id),
     #[error("Die letzte Spalte einer Tabelle lässt sich nicht entfernen")]
     LastColumn,
+    #[error("Die Spalten dieser Tabelle legt ihr LaTeX-Satz fest")]
+    FixedColumns,
     #[error("Position {0} liegt außerhalb des gültigen Bereichs")]
     OutOfRange(usize),
     #[error("Moduldefinition {0} fehlt im Dokument")]
@@ -350,6 +352,7 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             from,
             to,
         } => {
+            fixed_check(p, &part, &table)?;
             let inst = instance(p, &part)?;
             let (def, el_id) = p
                 .scope_module(&inst.module, &table)
@@ -547,6 +550,7 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             index,
             header,
         } => {
+            fixed_check(p, &part, &table)?;
             let (mut columns, _) = local_columns(p, &part, &table)?;
             if index > columns.len() {
                 return Err(EditError::OutOfRange(index));
@@ -577,6 +581,7 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             table,
             column,
         } => {
+            fixed_check(p, &part, &table)?;
             let (mut columns, rows_path) = local_columns(p, &part, &table)?;
             let i = columns
                 .iter()
@@ -900,6 +905,18 @@ fn local_columns(p: &Project, part: &Id, table: &str) -> Result<(Vec<Column>, St
             format!("{}{rows}", scope_prefix(table)),
         )),
         _ => Err(EditError::UnknownTable(table.to_owned())),
+    }
+}
+
+/// Tabellen mit eigenem LaTeX-Satz haben feste Spalten.
+fn fixed_check(p: &Project, part: &Id, table: &str) -> Result<(), EditError> {
+    let inst = instance(p, part)?;
+    let Some((def, el_id)) = p.scope_module(&inst.module, table) else {
+        return Ok(());
+    };
+    match find_element(&def.body, el_id).map(|e| &e.kind) {
+        Some(ElementKind::Table { latex: Some(_), .. }) => Err(EditError::FixedColumns),
+        _ => Ok(()),
     }
 }
 

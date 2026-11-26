@@ -116,3 +116,81 @@ fn pdf_positions_map_to_cells_and_back() {
     assert_eq!(hit["part"], "p4", "{hit}");
     assert_eq!(hit["kind"], "field", "{hit}");
 }
+
+#[test]
+fn table_with_own_layout_maps_cells() {
+    use formavium_core::{ElementKind, TableLatex};
+    if !tectonic_ok() {
+        eprintln!("Tectonic fehlt, Test übersprungen");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = formavium_core::sample::anleitung();
+    let ElementKind::Row { children } = &mut p.modules[0].body[1].kind else {
+        panic!("Anordnung erwartet")
+    };
+    let ElementKind::Table { latex, .. } = &mut children[0].kind else {
+        panic!("Tabelle erwartet")
+    };
+    // Wie die Firmenmodule: Eine Zeile ohne Bezeichnung setzt die darüber
+    // fort und bekommt statt der vollen Linie nur eine Teillinie.
+    *latex = Some(TableLatex {
+        begin: r"\begin{tabular}{|p{3cm}|r|l|}".into(),
+        row: r"\kd{#1}{#2}{#3}".into(),
+        end: r"\hline\end{tabular}".into(),
+    });
+    p.preamble.push_str(
+        "\n\\newcommand{\\kd}[3]{\\if\\relax\\detokenize{#1}\\relax\\cline{2-3}\\else\\hline\\fi #1&#2&#3\\\\}",
+    );
+    let formavium_core::PartContent::Module(inst) = &mut p.parts[1].content else {
+        panic!("Modul erwartet")
+    };
+    let Some(formavium_core::Value::Table(rows)) = inst.values.get_mut("zeilen") else {
+        panic!("Zeilen erwartet")
+    };
+    rows[1].merged.insert("bez".into());
+    let path = dir.path().join("t.fvm");
+    std::fs::create_dir_all(dir.path().join("bilder")).unwrap();
+    std::fs::write(
+        dir.path().join(formavium_core::sample::SAMPLE_IMAGE),
+        formavium_core::sample::SAMPLE_PNG,
+    )
+    .unwrap();
+    formavium_core::io::write_atomic(&path, &formavium_core::io::to_bytes(&p)).unwrap();
+    let mut s = Session::default();
+    s.call("open", &json!({ "path": path })).unwrap();
+    let preview = wait_preview(&mut s);
+    assert_eq!(preview["status"], "current", "{preview}");
+
+    for (row, column) in [
+        ("r1", "bez"),
+        ("r1", "menge"),
+        ("r1", "laenge"),
+        ("r2", "menge"),
+        ("r2", "laenge"),
+    ] {
+        let rects = s
+            .call(
+                "highlight",
+                &json!({ "targets": [{ "part": "p2", "path": "zeilen", "row": row, "column": column }] }),
+            )
+            .unwrap();
+        let r = rects[0].as_array().unwrap();
+        let (x, y, w, h) = (
+            r[1].as_f64().unwrap(),
+            r[2].as_f64().unwrap(),
+            r[3].as_f64().unwrap(),
+            r[4].as_f64().unwrap(),
+        );
+        assert!(w < 100.0, "nur die Zelle {row}/{column}: {r:?}");
+        let hit = s
+            .call(
+                "locate",
+                &json!({ "page": 1, "x": x + w / 2.0, "y": y + h / 2.0 }),
+            )
+            .unwrap();
+        assert_eq!(hit["kind"], "cell", "{hit}");
+        assert_eq!(hit["row"], row, "{hit}");
+        assert_eq!(hit["column"], column, "{hit}");
+    }
+}

@@ -491,3 +491,60 @@ fn module_preamble_is_emitted_once_before_the_document() {
     assert_eq!(text.matches(r"\providecommand{\jsMarke}{X}").count(), 1);
     assert!(text.find("jsMarke").unwrap() < text.find(r"\begin{document}").unwrap());
 }
+
+#[test]
+fn table_with_own_layout_fills_its_row_template() {
+    let bs = '\u{5c}';
+    let mut p = anleitung();
+    let ElementKind::Row { children } = &mut p.modules[0].body[1].kind else {
+        panic!("Anordnung erwartet")
+    };
+    let ElementKind::Table { latex, .. } = &mut children[0].kind else {
+        panic!("Tabelle erwartet")
+    };
+    *latex = Some(TableLatex {
+        begin: format!("{bs}begin{{eigen}}"),
+        row: format!("{bs}zeile{{#1}}{{#3}}{{#2}}##"),
+        end: format!("{bs}end{{eigen}}"),
+    });
+    let first = p.parts[1].id.clone();
+    let mut ws = Workspace::new(p);
+    // Zweite Zeile setzt die Bezeichnung der ersten fort.
+    apply(
+        &mut ws,
+        Command::MergeCells {
+            part: first.clone(),
+            table: "tabelle".into(),
+            rows: vec![Id::from("r1"), Id::from("r2")],
+            columns: vec![Id::from("bez")],
+            merge: true,
+        },
+    );
+    let g = generate(ws.project());
+    let text = &g.text;
+    let begin = text.find(&format!("{bs}begin{{eigen}}")).expect("Anfang");
+    let body = &text[begin..text.find(&format!("{bs}end{{eigen}}")).expect("Ende")];
+    let lines: Vec<&str> = body.lines().collect();
+    assert_eq!(
+        lines[1],
+        format!("{bs}zeile{{Schraube M4}}{{20}}{{12~Stk.}}#")
+    );
+    assert_eq!(lines[2], format!("{bs}zeile{{}}{{12,5}}{{4~Stk.}}#"));
+    assert!(!text.contains(&format!("{bs}begin{{tabular}}")));
+    assert!(!body.contains("multirow"));
+
+    // Spalten stehen fest.
+    let r = ws.revision();
+    let err = ws
+        .apply(
+            r,
+            Command::InsertColumn {
+                part: first,
+                table: "tabelle".into(),
+                index: 1,
+                header: "Neu".into(),
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, EditError::FixedColumns), "{err}");
+}

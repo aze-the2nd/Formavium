@@ -87,6 +87,7 @@ pub fn materialliste() -> ModuleDef {
                                 ],
                                 rows: Id::from("zeilen"),
                                 caption: None,
+                                latex: None,
                             },
                         },
                         Element {

@@ -201,6 +201,7 @@ fn map_span(
             path,
             row,
             column,
+            ..
         } => {
             // Zeilenumbrüche gehören zur Tabellenstruktur. Ein getipptes `&`
             // ist wie in jedem Feld Inhalt und wird beim Erzeugen maskiert.

@@ -113,35 +113,27 @@ impl SyncMap {
     /// Horizontale Boxen einer Zeile auf einer Seite, von links nach rechts.
     /// Boxen, die eine andere enthalten (eine ganze Tabellenzeile), fehlen.
     pub fn cells(&self, page: u32, line: u32) -> Vec<&SyncBox> {
-        let own = |b: &&SyncBox| b.page == page && b.line == line && b.hbox && b.w > 0.0;
-        // Die letzte Zelle einer Tabellenzeile endet mit `\\` und trägt die
-        // Folgezeile; sie liegt auf derselben Grundlinie rechts daneben.
-        let base: Vec<(f32, f32)> = self
-            .boxes
-            .iter()
-            .filter(own)
-            .map(|b| (b.y, b.x + b.w))
-            .collect();
-        let mut all: Vec<&SyncBox> = self
+        // Kandidaten: Boxen dieser und der folgenden Zeile. Die letzte Zelle
+        // einer Tabellenzeile endet mit `\\` und trägt die Folgezeile; die
+        // Vorzeile reicht umgekehrt ihre letzte Zelle in diese Zeile.
+        // Linien (`\hline`, `\cline`) sind keine Zellen.
+        let pool: Vec<&SyncBox> = self
             .boxes
             .iter()
             .filter(|b| {
-                own(b)
-                    || (b.page == page
-                        && b.line == line + 1
-                        && b.hbox
-                        && b.w > 0.0
-                        && base
-                            .iter()
-                            .any(|(y, right)| (b.y - y).abs() < 0.5 && b.x >= right - 0.5))
+                b.page == page
+                    && b.hbox
+                    && b.w > 0.0
+                    && b.h + b.d >= 1.0
+                    && (b.line == line || b.line == line + 1)
             })
             .collect();
-        all.sort_by(|a, b| a.x.total_cmp(&b.x));
-        let inner: Vec<&SyncBox> = all
+        // Nur die innersten Boxen: keine Zeilen- oder Zellrahmen um Inhalte.
+        let inner: Vec<&SyncBox> = pool
             .iter()
             .copied()
             .filter(|b| {
-                !all.iter().any(|o| {
+                !pool.iter().any(|o| {
                     !std::ptr::eq(*o, *b)
                         && o.x >= b.x - 0.01
                         && o.x + o.w <= b.x + b.w + 0.01
@@ -150,7 +142,22 @@ impl SyncMap {
                 })
             })
             .collect();
-        inner
+        // Grundlinie dieser Zeile: die der ersten Zelle links oben.
+        let Some(start) = inner
+            .iter()
+            .filter(|b| b.line == line)
+            .min_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
+        else {
+            return Vec::new();
+        };
+        let base = start.y;
+        let mut row: Vec<&SyncBox> = inner
+            .iter()
+            .copied()
+            .filter(|b| (b.y - base).abs() < 0.5)
+            .collect();
+        row.sort_by(|a, b| a.x.total_cmp(&b.x));
+        row
     }
 }
 

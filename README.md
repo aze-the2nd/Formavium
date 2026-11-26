@@ -91,6 +91,13 @@ Braucht ein Modul eigene Pakete oder Befehle, gehören sie in seinen
 **Vorspann** (Modul-Werkstatt). Mit `\providecommand` definiert, kann eine
 Vorlage sie vorgeben, und das Modul funktioniert in jedem Dokument.
 
+Eine Tabelle kann statt des Standardgitters einen **eigenen LaTeX-Satz**
+haben, etwa für ein Firmenlayout: Anfang, Ende und eine Zeile mit `#1`,
+`#2` … für die Zellen, zum Beispiel `\kenndaten{#1}{#2}`. Die Spalten
+stehen dann fest, Zeilen fügt man im Dokument wie gewohnt hinzu, und eine
+verbundene Zelle kommt leer an, sodass der eigene Befehl sie als
+Fortsetzung der Zeile darüber setzen kann.
+
 ## Updates und Feedback
 
 - **Auto-Update:** Die installierte App sucht beim Start im neuesten

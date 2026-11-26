@@ -113,6 +113,7 @@ fn table(id: &str, rows: &str, columns: Vec<Column>) -> Element {
             columns,
             rows: Id::from(rows),
             caption: None,
+            latex: None,
         },
     )
 }

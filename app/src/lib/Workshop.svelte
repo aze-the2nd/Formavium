@@ -460,6 +460,31 @@
         {/each}
         <button class="add-line" onclick={() => addColumn(el.id)}>+ Spalte</button>
       </div>
+      <details class="pre tsatz" open={!!el.latex}>
+        <summary>Eigener LaTeX-Satz <span class="muted">statt des Standardgitters</span></summary>
+        <p class="muted">
+          Für Firmenlayouts: Anfang und Ende der Tabelle, dazu eine Zeile mit <code>#1</code>, <code>#2</code> … für die
+          Zellen. Die Spalten stehen dann fest; Zeilen fügt man im Dokument frei hinzu. Eine verbundene Zelle ist leer.
+        </p>
+        {#each [['begin', 'Anfang', '\\begin{tabular}{|l|l|}'], ['row', 'Zeile', '\\hline #1 & #2 \\\\'], ['end', 'Ende', '\\hline\\end{tabular}']] as [key, name, hint] (key)}
+          <label class="pair satz">
+            <span class="tag muted">{name}</span>
+            <div class="code">
+              <EditableText
+                value={el.latex?.[key as 'begin' | 'row' | 'end'] ?? ''}
+                label="{name} des Tabellensatzes"
+                placeholder={hint}
+                onCommit={(v: string) =>
+                  editElement(el.id, (x) => {
+                    if (x.kind !== 'table') return;
+                    const next = { begin: '', row: '', end: '', ...(x.latex ?? {}), [key]: v.trim() };
+                    x.latex = next.begin || next.row || next.end ? next : null;
+                  })}
+              />
+            </div>
+          </label>
+        {/each}
+      </details>
     {:else if el.kind === 'image'}
       <label class="pair">
         <span class="tag muted">Breite</span>
@@ -785,6 +810,11 @@
     grid-template-columns: 58px minmax(0, 1fr) auto;
     align-items: baseline;
     gap: 4px;
+  }
+  .pair.satz {
+    grid-template-columns: 58px minmax(0, 1fr);
+    align-items: center;
+    margin-top: 4px;
   }
   .tag {
     font-size: 11px;

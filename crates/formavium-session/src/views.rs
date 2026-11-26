@@ -139,6 +139,8 @@ pub enum ElView {
         caption: Option<String>,
         columns: Vec<ColView>,
         rows: Vec<RowView>,
+        /// Eigener LaTeX-Satz: Spalten stehen fest, im PDF keine Kopfzeile.
+        fixed: bool,
     },
     Image {
         field: String,
@@ -297,6 +299,7 @@ fn elements(
                 columns,
                 rows,
                 caption,
+                latex,
             } => {
                 let path = format!("{scope}{}", el.id);
                 let rows_path = format!("{scope}{rows}");
@@ -332,6 +335,7 @@ fn elements(
                         .collect(),
                     path,
                     rows_path,
+                    fixed: latex.is_some(),
                 }
             }
             ElementKind::Image { path, width } => {

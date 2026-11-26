@@ -17,7 +17,7 @@ export type ColumnDef = {
 export type ElementDef = { id: string } & (
   | { kind: 'heading'; level: number; text: TextRef }
   | { kind: 'paragraph'; text: TextRef }
-  | { kind: 'table'; columns: ColumnDef[]; rows: string; caption: TextRef | null }
+  | { kind: 'table'; columns: ColumnDef[]; rows: string; caption: TextRef | null; latex?: { begin: string; row: string; end: string } | null }
   | { kind: 'image'; path: string; width: number }
   | { kind: 'list'; items: string; ordered: boolean }
   | { kind: 'row'; children: ElementDef[] }

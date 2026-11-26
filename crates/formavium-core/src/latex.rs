@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use crate::model::{
     Align, Column, Element, ElementKind, Id, ModuleInstance, ModuleRef, PartContent, Project, Row,
-    Text, UnitPlacement, Value, LIST_COLUMN,
+    TableLatex, Text, UnitPlacement, Value, LIST_COLUMN,
 };
 
 /// Herkunft eines Bereichs im erzeugten Quelltext.
@@ -35,6 +35,8 @@ pub enum Origin {
         path: String,
         row: Id,
         column: Id,
+        /// Stelle der Zelle in ihrer gesetzten Zeile (0 = erste Spalte).
+        index: usize,
     },
 }
 
@@ -50,6 +52,7 @@ impl std::fmt::Display for Origin {
                 path,
                 row,
                 column,
+                ..
             } => {
                 write!(
                     f,
@@ -524,7 +527,11 @@ fn emit_element(w: &mut Writer, ctx: &Ctx, el: &Element) {
             columns,
             rows,
             caption,
-        } => emit_table(w, ctx, el, columns, rows, caption.as_ref()),
+            latex,
+        } => match latex {
+            Some(template) => emit_table_template(w, ctx, el, columns, rows, template),
+            None => emit_table(w, ctx, el, columns, rows, caption.as_ref()),
+        },
         ElementKind::Image { path, width } => {
             let field_path = ctx.path(path);
             let value = match w.project.effective_value(ctx.inst, &field_path) {
@@ -625,6 +632,7 @@ fn emit_element(w: &mut Writer, ctx: &Ctx, el: &Element) {
                         path: path.clone(),
                         row: row.id.clone(),
                         column: column.clone(),
+                        index: 0,
                     };
                     w.spanned(origin, |w| w.push(&escape_text(cell)));
                     w.push("\n");
@@ -939,6 +947,7 @@ fn emit_table(
                     path: rows_path.clone(),
                     row: row.id.clone(),
                     column: c.id.clone(),
+                    index: i,
                 };
                 let content = if c.latex {
                     cell.to_owned()
@@ -983,6 +992,93 @@ fn emit_table(
         );
     }
     w.push("\\end{tabular}\n\\end{center}\n");
+}
+
+/// Tabelle im eigenen Satz des Modulautors: Anfang, je Zeile die Vorlage
+/// mit `#1`…`#9` für die Zellen, Ende. Jede Zeile steht auf einer eigenen
+/// Quelltextzeile, damit SyncTeX die Zellen zuordnen kann.
+fn emit_table_template(
+    w: &mut Writer,
+    ctx: &Ctx,
+    el: &Element,
+    columns: &[Column],
+    rows: &Id,
+    template: &TableLatex,
+) {
+    let table_path = ctx.path(&el.id);
+    let cols = ordered_columns(ctx.inst, &table_path, columns);
+    let rows_path = ctx.path(rows);
+    let data: Vec<Row> = match w.project.effective_value(ctx.inst, &rows_path) {
+        Some(Value::Table(r)) => r.clone(),
+        _ => Vec::new(),
+    };
+    let begin = template.begin.trim_end_matches(['\n', '\r']);
+    if !begin.is_empty() {
+        scan_graphics(begin, &mut w.out.resources);
+        w.push(begin);
+        w.push("\n");
+    }
+    let row_template = template.row.replace(['\n', '\r'], " ");
+    w.spanned(ctx.field_origin(rows), |w| {
+        for (ri, row) in data.iter().enumerate() {
+            let mut rest = row_template.as_str();
+            while let Some(at) = rest.find('#') {
+                w.push(&rest[..at]);
+                let after = &rest[at + 1..];
+                match after.chars().next() {
+                    Some('#') => {
+                        w.push("#");
+                        rest = &after[1..];
+                    }
+                    Some(d @ '1'..='9') => {
+                        let i = d as usize - '1' as usize;
+                        rest = &after[1..];
+                        let Some(c) = cols.get(i) else { continue };
+                        // Fortsetzung einer verbundenen Zelle: leer.
+                        if ri > 0 && row.merged.contains(&c.id) {
+                            continue;
+                        }
+                        let cell = row.cells.get(&c.id).map(String::as_str).unwrap_or("");
+                        let origin = Origin::Cell {
+                            part: ctx.part.clone(),
+                            path: rows_path.clone(),
+                            row: row.id.clone(),
+                            column: c.id.clone(),
+                            index: i,
+                        };
+                        let mut content = if c.latex {
+                            cell.to_owned()
+                        } else {
+                            escape_text(cell)
+                        };
+                        if let (Some(unit), UnitPlacement::Value) = (&c.unit, c.unit_placement) {
+                            if !cell.trim().is_empty() {
+                                let _ = write!(content, "~{}", escape_text(unit));
+                            }
+                        }
+                        w.spanned(origin, |w| w.push(&content));
+                    }
+                    _ => {
+                        w.push("#");
+                        rest = after;
+                    }
+                }
+            }
+            w.push(rest);
+            w.push("\n");
+        }
+    });
+    if data.is_empty() && ctx.inst.required {
+        w.notice(
+            ctx.field_origin(rows),
+            format!("Tabelle „{rows_path}“ ist leer"),
+        );
+    }
+    let end = template.end.trim_matches(['\n', '\r']);
+    if !end.is_empty() {
+        w.push(end);
+        w.push("\n");
+    }
 }
 
 #[cfg(test)]

@@ -40,6 +40,9 @@
     return letters.length >= 3 ? text : '';
   });
 
+  // TeX-Felder zeigen ihre Vorschau, bis sie angeklickt werden.
+  let rawEditing = $state<string | null>(null);
+
   const short = (label: string) => label.replace(/\s*\((?:optional|LaTeX[^)]*)\)\s*$/i, '');
   const optional = (label: string) => /optional/i.test(label);
 </script>
@@ -62,14 +65,30 @@
             <span class="label" title={f.label}>
               {short(f.label)}{#if f.kind === 'raw'}<span class="tag">TeX</span>{/if}{#if optional(f.label)}<span class="opt">optional</span>{/if}
             </span>
-            <div class="value" class:raw={f.kind === 'raw'}>
-              <EditableText
-                multiline
-                value={f.value}
-                label={f.label}
-                placeholder={short(f.label)}
-                onCommit={(v: string) => setText(f.path, v, f.numeric)}
-              />
+            <div class="value" class:raw={f.kind === 'raw' && rawEditing === f.path}>
+              {#if f.kind === 'raw' && rawEditing !== f.path}
+                <button
+                  class="preview"
+                  title="Klicken zum Bearbeiten (LaTeX)"
+                  aria-label="{f.label} bearbeiten"
+                  onclick={() => (rawEditing = f.path)}
+                  onfocus={() => (rawEditing = f.path)}
+                >
+                  {#if f.value}{@html texPreview(f.value)}{:else}<span class="empty">{short(f.label)}</span>{/if}
+                </button>
+              {:else}
+                <EditableText
+                  multiline
+                  autofocus={rawEditing === f.path}
+                  value={f.value}
+                  label={f.label}
+                  placeholder={short(f.label)}
+                  onCommit={(v: string) => setText(f.path, v, f.numeric)}
+                  onBlur={() => {
+                    if (rawEditing === f.path) rawEditing = null;
+                  }}
+                />
+              {/if}
             </div>
           </div>
         {/each}
@@ -90,29 +109,40 @@
     max-width: 460px;
     margin: 0 auto;
   }
+  /* Wie eine Tabelle im Mockup: Bezeichnung links, Wert rechts. */
   .list {
     display: grid;
-    gap: 2px;
+    border-left: 1px solid var(--grid-line);
+    border-top: 1px solid var(--grid-line);
+    font-family: var(--ui);
+    font-size: 13px;
   }
   .row {
     display: grid;
-    grid-template-columns: minmax(90px, 30%) minmax(0, 1fr);
-    align-items: baseline;
-    gap: 0 12px;
+    grid-template-columns: minmax(110px, 34%) minmax(0, 1fr);
+    min-height: 36px;
+  }
+  .label,
+  .value {
+    border-right: 1px solid var(--grid-line);
+    border-bottom: 1px solid var(--grid-line);
   }
   .label {
-    font-family: var(--ui);
-    font-size: 11.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    font-size: 12px;
     color: var(--muted);
+    background: var(--grid-index);
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    text-overflow: ellipsis;
   }
   .tag,
   .opt {
-    margin-left: 6px;
-    font-size: 9.5px;
-    letter-spacing: 0.04em;
+    font-size: 9px;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
   }
   .tag {
@@ -124,11 +154,44 @@
   }
   .value {
     min-width: 0;
-    margin-left: -6px;
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    color: var(--grid-label);
+    --et-font: var(--ui);
+    --et-size: 13px;
+    --et-pad: 5px 7px;
+  }
+  .value > :global(*) {
+    flex: 1;
   }
   .value.raw {
     --et-font: var(--mono);
-    --et-size: 12.5px;
+    --et-size: 12px;
+  }
+  .preview {
+    display: block;
+    width: 100%;
+    min-height: 30px;
+    text-align: left;
+    font: 13px var(--ui);
+    color: inherit;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 5px 7px;
+    cursor: text;
+  }
+  .preview:hover {
+    background: var(--grid-hover);
+  }
+  .preview :global(sub),
+  .preview :global(sup) {
+    font-size: 0.7em;
+  }
+  .empty {
+    color: var(--muted);
+    opacity: 0.7;
   }
   /* Schmale Spalten (etwa neben einem Bild): Bezeichnung über dem Wert. */
   @container lf (max-width: 340px) {
@@ -137,7 +200,8 @@
     }
     .label {
       white-space: normal;
-      margin-top: 4px;
+      border-bottom: none;
+      padding-bottom: 0;
     }
   }
   .prose {
