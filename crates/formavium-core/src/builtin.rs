@@ -55,6 +55,7 @@ fn data(lines: &[&[(&str, &str)]]) -> Vec<Row> {
                 .iter()
                 .map(|(k, v)| (Id::from(*k), (*v).to_owned()))
                 .collect::<BTreeMap<_, _>>(),
+            merged: Default::default(),
         })
         .collect()
 }
@@ -93,6 +94,7 @@ fn col(id: &str, header: &str, align: Align) -> Column {
         unit_placement: UnitPlacement::Header,
         align,
         width: None,
+        latex: false,
     }
 }
 
@@ -146,6 +148,7 @@ fn module(
         version: 1,
         name: name.into(),
         description: description.into(),
+        preamble: String::new(),
         fields,
         body,
     }
@@ -540,7 +543,20 @@ pub fn templates() -> Vec<(&'static str, Project)> {
             ),
         ),
         ("montageanleitung", sample),
+        ("freies-latex", free_latex()),
     ]
+}
+
+/// Nerd-Modus: ein leeres, vollständiges LaTeX-Dokument ohne Module.
+fn free_latex() -> Project {
+    let mut p = Project::new(
+        "Freies LaTeX",
+        "\\documentclass[a4paper,11pt]{article}\n\\usepackage{fontspec}\n\\usepackage[ngerman]{babel}\n\\usepackage[margin=2.5cm]{geometry}\n\\usepackage{graphicx}\n\\usepackage{amsmath}\n\n\\begin{document}\n\n\\section{Einleitung}\nHier steht dein Text. Formeln wie $U = R \\cdot I$ funktionieren direkt.\n\n\\end{document}\n",
+    );
+    p.free = true;
+    p.description =
+        "Nerd-Modus: das ganze Dokument als LaTeX-Quelltext, ohne Module und ohne Schutz.".into();
+    p
 }
 
 /// Bilder der mitgelieferten Vorlagen.

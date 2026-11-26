@@ -21,6 +21,7 @@ fn latex_module(id: &str, source: &str, fields: Vec<FieldDef>) -> ModuleDef {
         version: 1,
         name: id.into(),
         description: String::new(),
+        preamble: String::new(),
         fields,
         body: vec![Element {
             id: Id::from("inhalt"),

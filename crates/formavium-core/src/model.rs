@@ -5,7 +5,7 @@
 //! Das Dokument trägt damit alle benötigten Modulstände mit und lässt sich
 //! ohne Bibliothek öffnen.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,11 @@ pub struct Project {
     /// Kurzbeschreibung, vor allem für Vorlagen.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Freies LaTeX-Dokument (Nerd-Modus): `preamble` enthält die ganze
+    /// Datei, Teile und Module gibt es nicht. Nichts wird ergänzt oder
+    /// geschützt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free: bool,
     /// Freies LaTeX vor `\begin{document}`, einschließlich `\documentclass`.
     pub preamble: String,
     pub parts: Vec<Part>,
@@ -129,6 +134,12 @@ pub struct ModuleDef {
     /// Kurzbeschreibung für die Modulauswahl.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// LaTeX für den Dokumentkopf, das dieses Modul braucht (Pakete,
+    /// Befehle). Es steht nach dem Vorspann des Dokuments; Befehle sollten
+    /// mit `\providecommand` definiert sein, damit eine Vorlage sie
+    /// vorgeben kann.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preamble: String,
     #[serde(default)]
     pub fields: Vec<FieldDef>,
     pub body: Vec<Element>,
@@ -194,6 +205,20 @@ pub struct Row {
     pub id: Id,
     /// Zellwerte je Spaltenkennung.
     pub cells: BTreeMap<Id, String>,
+    /// Spalten, in denen diese Zelle mit der darüber verbunden ist. Ihr
+    /// Inhalt steht in der obersten Zelle des Blocks.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub merged: BTreeSet<Id>,
+}
+
+impl Row {
+    pub fn new(id: Id) -> Self {
+        Row {
+            id,
+            cells: BTreeMap::new(),
+            merged: BTreeSet::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -274,6 +299,10 @@ pub struct Column {
     /// der Zelle um. Ohne Angabe richtet sich die Breite nach dem Inhalt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f32>,
+    /// Zellen enthalten LaTeX (Indizes, Formeln, Farben) und werden nicht
+    /// maskiert.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub latex: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,6 +329,7 @@ impl Project {
             schema: SCHEMA_VERSION,
             title: title.into(),
             description: String::new(),
+            free: false,
             preamble: preamble.into(),
             parts: Vec::new(),
             modules: Vec::new(),

@@ -147,7 +147,8 @@ impl Generated {
     }
 }
 
-fn line_start(text: &str, line: u32) -> Option<usize> {
+/// Byteposition des Zeilenanfangs (Zeilen ab 1).
+pub fn line_start(text: &str, line: u32) -> Option<usize> {
     if line == 0 {
         return None;
     }
@@ -299,6 +300,18 @@ pub fn generate(project: &Project) -> Generated {
         out: Generated::default(),
     };
 
+    // Freies Dokument: Die Datei ist genau der Text des Anwenders.
+    if project.free {
+        w.spanned(Origin::Preamble, |w| {
+            w.push(&project.preamble);
+            if !project.preamble.ends_with('\n') {
+                w.push("\n");
+            }
+        });
+        scan_graphics(&project.preamble, &mut w.out.resources);
+        return w.out;
+    }
+
     w.spanned(Origin::Preamble, |w| {
         w.push(project.preamble.trim_end());
         w.push("\n");
@@ -309,6 +322,16 @@ pub fn generate(project: &Project) -> Generated {
     for pkg in packages {
         if !project.preamble.contains(pkg) {
             let _ = writeln!(w.out.text, "\\usepackage{{{pkg}}}");
+        }
+    }
+    // Vorspann der Module, jeder Text nur einmal.
+    let mut seen = BTreeSet::new();
+    for def in &project.modules {
+        let pre = def.preamble.trim();
+        if !pre.is_empty() && seen.insert(pre) {
+            w.push(pre);
+            w.push("\n");
+            scan_graphics(pre, &mut w.out.resources);
         }
     }
     w.push("\\begin{document}\n");
@@ -390,12 +413,25 @@ fn required_packages(project: &Project) -> Vec<&'static str> {
             array |= inst.columns.values().flatten().any(|c| c.width.is_some());
         }
     }
+    // Verbundene Zellen in Werten der Dokumente oder Vorgaben der Module.
+    let merged =
+        |v: &Value| matches!(v, Value::Table(rows) if rows.iter().any(|r| !r.merged.is_empty()));
+    let multirow = project.parts.iter().any(|part| {
+        matches!(&part.content, PartContent::Module(inst) if inst.values.values().any(merged))
+    }) || project
+        .modules
+        .iter()
+        .flat_map(|d| &d.fields)
+        .any(|f| f.default.as_ref().is_some_and(merged));
     let mut v = Vec::new();
     if graphicx {
         v.push("graphicx");
     }
     if array {
         v.push("array");
+    }
+    if multirow {
+        v.push("multirow");
     }
     v
 }
@@ -767,6 +803,34 @@ fn placeholder(w: &mut Writer, width: f32, label: &str) {
     );
 }
 
+/// Spalte der Tabelle, deren Zeilen aus dem Tabellenfeld `rows_path`
+/// einer Verwendung stammen. Listen haben keine Spalten.
+pub fn table_column<'p>(
+    project: &'p Project,
+    part: &Id,
+    rows_path: &str,
+    column: &Id,
+) -> Option<&'p Column> {
+    let inst = project.instance(part)?;
+    let (def, field) = project.scope_module(&inst.module, rows_path)?;
+    fn find<'a>(body: &'a [Element], field: &str) -> Option<&'a Element> {
+        body.iter().find_map(|el| match &el.kind {
+            ElementKind::Table { rows, .. } if rows.as_str() == field => Some(el),
+            ElementKind::Row { children } => find(children, field),
+            _ => None,
+        })
+    }
+    let el = find(&def.body, field)?;
+    let ElementKind::Table { columns, .. } = &el.kind else {
+        return None;
+    };
+    let scope = &rows_path[..rows_path.len() - field.len()];
+    let table_path = format!("{scope}{}", el.id);
+    ordered_columns(inst, &table_path, columns)
+        .into_iter()
+        .find(|c| &c.id == column)
+}
+
 /// Effektive Spalten einer Tabelle in einer Instanz: lokal angepasste
 /// Spalten ersetzen die der Definition, darauf wirkt die lokale Reihenfolge.
 pub fn ordered_columns<'c>(
@@ -852,10 +916,22 @@ fn emit_table(
     }
     w.push(" \\\\\n\\hline\n");
     w.spanned(ctx.field_origin(rows), |w| {
-        for row in &data {
+        for (ri, row) in data.iter().enumerate() {
             for (i, c) in cols.iter().enumerate() {
                 if i > 0 {
                     w.push(" & ");
+                }
+                // Verbundene Zelle: Der Inhalt steht in der obersten Zelle.
+                if ri > 0 && row.merged.contains(&c.id) {
+                    continue;
+                }
+                let span = 1 + data[ri + 1..]
+                    .iter()
+                    .take_while(|r| r.merged.contains(&c.id))
+                    .count();
+                if span > 1 {
+                    let width = if c.width.is_some() { "=" } else { "*" };
+                    let _ = write!(w.out.text, "\\multirow{{{span}}}{{{width}}}{{");
                 }
                 let cell = row.cells.get(&c.id).map(String::as_str).unwrap_or("");
                 let origin = Origin::Cell {
@@ -864,14 +940,40 @@ fn emit_table(
                     row: row.id.clone(),
                     column: c.id.clone(),
                 };
-                w.spanned(origin, |w| w.push(&escape_text(cell)));
+                let content = if c.latex {
+                    cell.to_owned()
+                } else {
+                    escape_text(cell)
+                };
+                w.spanned(origin, |w| w.push(&content));
                 if let (Some(unit), UnitPlacement::Value) = (&c.unit, c.unit_placement) {
                     if !cell.trim().is_empty() {
                         let _ = write!(w.out.text, "~{}", escape_text(unit));
                     }
                 }
+                if span > 1 {
+                    w.push("}");
+                }
             }
-            w.push(" \\\\\n\\hline\n");
+            w.push(" \\\\\n");
+            // Unter verbundenen Zellen keine Linie.
+            let next = data.get(ri + 1);
+            let open: Vec<usize> = (0..cols.len())
+                .filter(|&i| next.is_none_or(|n| !n.merged.contains(&cols[i].id)))
+                .collect();
+            if open.len() == cols.len() {
+                w.push("\\hline\n");
+            } else {
+                let mut i = 0;
+                while i < open.len() {
+                    let start = open[i];
+                    while i + 1 < open.len() && open[i + 1] == open[i] + 1 {
+                        i += 1;
+                    }
+                    let _ = writeln!(w.out.text, "\\cline{{{}-{}}}", start + 1, open[i] + 1);
+                    i += 1;
+                }
+            }
         }
     });
     if data.is_empty() && ctx.inst.required {

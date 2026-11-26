@@ -39,7 +39,13 @@ fn library_flow_from_template_to_published_module() {
         .collect();
     assert_eq!(
         templates,
-        ["leer", "bericht", "datenblatt", "montageanleitung"]
+        [
+            "leer",
+            "bericht",
+            "datenblatt",
+            "montageanleitung",
+            "freies-latex"
+        ]
     );
 
     // Neues Dokument aus einer Vorlage, im eigenen Ordner.
@@ -311,4 +317,56 @@ fn free_latex_becomes_a_module() {
             &json!({ "base": rev(&r["doc"]), "module": r["module"] })
         )
         .is_err());
+}
+
+#[test]
+fn free_latex_documents_are_edited_without_any_protection() {
+    let docs = tempfile::tempdir().unwrap();
+    let mut s = Session::default();
+    let doc = s
+        .call(
+            "new_document",
+            &json!({ "path": docs.path().join("frei.fvm"), "template": "freies-latex" }),
+        )
+        .unwrap();
+    assert_eq!(doc["free"], true);
+    assert!(doc["parts"].as_array().unwrap().is_empty());
+    let src = doc["source"].as_str().unwrap().to_owned();
+    // Auch der Rahmen ist frei: documentclass ersetzen.
+    let at = src.find("article").unwrap();
+    let r = s
+        .call(
+            "source_edit",
+            &json!({ "base": rev(&doc), "from": at, "to": at + 7, "insert": "report" }),
+        )
+        .unwrap();
+    assert_eq!(r["outcome"], "applied", "{r}");
+    assert!(r["doc"]["source"]
+        .as_str()
+        .unwrap()
+        .starts_with(r"\documentclass[a4paper,11pt]{report}"));
+
+    // Ein geführtes Dokument als freie Kopie weiterführen; das Original bleibt.
+    let guided = s
+        .call(
+            "new_document",
+            &json!({ "path": docs.path().join("anleitung.fvm"), "template": "montageanleitung" }),
+        )
+        .unwrap();
+    s.call("save", &json!({})).unwrap();
+    let copy = s
+        .call(
+            "to_free_copy",
+            &json!({ "path": docs.path().join("anleitung-latex.fvm") }),
+        )
+        .unwrap();
+    assert_eq!(copy["free"], true);
+    assert_eq!(copy["source"], guided["source"]);
+    assert!(docs
+        .path()
+        .join("anleitung-latex/bilder/beispiel.png")
+        .is_file());
+    let original = s.call("open", &json!({ "path": guided["path"] })).unwrap();
+    assert_eq!(original["free"], false);
+    assert_eq!(original["parts"].as_array().unwrap().len(), 4);
 }

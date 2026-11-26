@@ -57,6 +57,7 @@ impl TectonicEngine {
             "--outdir",
             "out",
             "--keep-logs",
+            "--synctex",
         ]
         .map(String::from)
         .into();
@@ -218,7 +219,14 @@ impl Engine for TectonicEngine {
             Ok(Wait::Exited(true)) => match fs::read(dir.path().join("out").join("main.pdf")) {
                 Ok(bytes) => RenderOutcome {
                     revision: rev,
-                    result: Ok(RenderedPdf::new(bytes)),
+                    result: Ok(RenderedPdf {
+                        // Ohne SyncTeX-Datei fehlt nur die Zuordnung.
+                        sync: fs::read(dir.path().join("out").join("main.synctex.gz"))
+                            .ok()
+                            .and_then(|gz| crate::SyncMap::from_gz(&gz).ok())
+                            .map(Arc::new),
+                        ..RenderedPdf::new(bytes)
+                    }),
                     warnings: diagnostics
                         .into_iter()
                         .filter(|d| d.severity == Severity::Warning)

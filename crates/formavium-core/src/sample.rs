@@ -19,12 +19,14 @@ pub fn materialliste() -> ModuleDef {
         unit_placement: placement,
         align,
         width: None,
+        latex: false,
     };
     ModuleDef {
         id: Id::from("materialliste"),
         version: 1,
         name: "Materialliste".into(),
         description: "Überschrift, Tabelle mit Menge und Länge, daneben ein Bild.".into(),
+        preamble: String::new(),
         fields: vec![
             FieldDef {
                 id: Id::from("titel"),
@@ -108,6 +110,7 @@ pub fn row(id: &str, cells: &[(&str, &str)]) -> Row {
             .iter()
             .map(|(k, v)| (Id::from(*k), (*v).to_owned()))
             .collect::<BTreeMap<_, _>>(),
+        merged: Default::default(),
     }
 }
 

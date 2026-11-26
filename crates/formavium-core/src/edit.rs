@@ -7,8 +7,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use std::collections::BTreeMap;
-
 use crate::model::{
     find_element, Align, Column, ElementKind, FieldKind, Id, ModuleDef, ModuleInstance, ModuleRef,
     Part, PartContent, Project, Row, Text, UnitPlacement, Value,
@@ -67,6 +65,27 @@ pub enum Command {
         path: String,
         row: Id,
         to: usize,
+    },
+    /// Zellen eines rechteckigen Bereichs senkrecht verbinden (`merge`)
+    /// oder wieder trennen. `rows` und `columns` nennen den Bereich; der
+    /// Inhalt der obersten Zelle bleibt, die übrigen werden geleert.
+    MergeCells {
+        part: Id,
+        table: String,
+        rows: Vec<Id>,
+        columns: Vec<Id>,
+        merge: bool,
+    },
+    /// Darstellung einer Spalte in dieser Verwendung ändern.
+    SetColumnStyle {
+        part: Id,
+        table: String,
+        column: Id,
+        #[serde(default)]
+        align: Option<Align>,
+        /// Zellen als LaTeX ausgeben statt zu maskieren.
+        #[serde(default)]
+        latex: Option<bool>,
     },
     /// Zellblock ab einer Zelle einsetzen, etwa aus der Zwischenablage
     /// (`table` ist das Tabellenelement, `row` und `column` zählen in der
@@ -148,6 +167,10 @@ pub enum Command {
     },
     SetTitle {
         title: String,
+    },
+    /// Kopie eines Teils mit allen Werten direkt dahinter.
+    DuplicatePart {
+        part: Id,
     },
 }
 
@@ -378,13 +401,13 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
                     break id;
                 }
             };
-            rows.insert(
-                index,
-                Row {
-                    id: id.clone(),
-                    cells: BTreeMap::new(),
-                },
-            );
+            let mut new = Row::new(id.clone());
+            // Mitten in einem verbundenen Block bleibt die neue Zeile Teil davon.
+            if let Some(next) = rows.get(index) {
+                new.merged = next.merged.clone();
+            }
+            rows.insert(index, new);
+            normalize(&mut rows);
             set_rows(p, &part, path, rows);
             return Ok(Some(id));
         }
@@ -394,7 +417,9 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
                 .iter()
                 .position(|r| r.id == row)
                 .ok_or(EditError::UnknownRow(row))?;
+            detach(&mut rows, i);
             rows.remove(i);
+            normalize(&mut rows);
             set_rows(p, &part, path, rows);
         }
         Command::MoveRow {
@@ -411,8 +436,10 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             if to >= rows.len() {
                 return Err(EditError::OutOfRange(to));
             }
+            detach(&mut rows, i);
             let r = rows.remove(i);
             rows.insert(to, r);
+            normalize(&mut rows);
             set_rows(p, &part, path, rows);
         }
         Command::PasteCells {
@@ -436,16 +463,83 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
                             break id;
                         }
                     };
-                    rows.push(Row {
-                        id,
-                        cells: BTreeMap::new(),
-                    });
+                    rows.push(Row::new(id));
                 }
                 for (col, value) in columns.iter().skip(column).zip(line) {
-                    rows[at].cells.insert(col.id.clone(), value);
+                    // Verbundene Zellen zeigen den Inhalt der obersten Zelle.
+                    if !rows[at].merged.contains(&col.id) {
+                        rows[at].cells.insert(col.id.clone(), value);
+                    }
                 }
             }
             set_rows(p, &part, rows_path, rows);
+        }
+        Command::MergeCells {
+            part,
+            table,
+            rows: range,
+            columns: cols,
+            merge,
+        } => {
+            let (columns, rows_path) = local_columns(p, &part, &table)?;
+            let mut rows = table_rows(p, &part, &rows_path)?;
+            let index = |id: &Id| {
+                rows.iter()
+                    .position(|r| &r.id == id)
+                    .ok_or_else(|| EditError::UnknownRow(id.clone()))
+            };
+            let mut found = Vec::new();
+            for id in &range {
+                found.push(index(id)?);
+            }
+            let (Some(&first), Some(&last)) = (found.iter().min(), found.iter().max()) else {
+                return Err(EditError::OutOfRange(0));
+            };
+            for c in &cols {
+                if columns.iter().all(|x| &x.id != c) {
+                    return Err(EditError::UnknownColumn(c.clone()));
+                }
+            }
+            for c in &cols {
+                if merge {
+                    for r in &mut rows[first + 1..=last] {
+                        r.merged.insert(c.clone());
+                        r.cells.remove(c);
+                    }
+                } else {
+                    // Trennen löst den ganzen Block ab der ersten Zeile.
+                    let mut r = first + 1;
+                    while r < rows.len() && (r <= last || rows[r].merged.contains(c)) {
+                        rows[r].merged.remove(c);
+                        r += 1;
+                    }
+                    if rows[first].merged.contains(c) {
+                        rows[first].merged.remove(c);
+                    }
+                }
+            }
+            normalize(&mut rows);
+            set_rows(p, &part, rows_path, rows);
+        }
+        Command::SetColumnStyle {
+            part,
+            table,
+            column,
+            align,
+            latex,
+        } => {
+            let (mut columns, _) = local_columns(p, &part, &table)?;
+            let col = columns
+                .iter_mut()
+                .find(|c| c.id == column)
+                .ok_or(EditError::UnknownColumn(column))?;
+            if let Some(align) = align {
+                col.align = align;
+            }
+            if let Some(latex) = latex {
+                col.latex = latex;
+            }
+            set_columns(p, &part, table, columns);
         }
         Command::InsertColumn {
             part,
@@ -472,6 +566,7 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
                     unit_placement: UnitPlacement::default(),
                     align: Align::default(),
                     width: None,
+                    latex: false,
                 },
             );
             set_columns(p, &part, table, columns);
@@ -649,6 +744,19 @@ fn apply_to(p: &mut Project, cmd: Command) -> Result<Option<Id>, EditError> {
             p.parts[i].content = PartContent::Module(ModuleInstance::new(module));
         }
         Command::SetTitle { title } => p.title = title,
+        Command::DuplicatePart { part } => {
+            let i = p.part_index(&part).ok_or(EditError::UnknownPart(part))?;
+            let content = p.parts[i].content.clone();
+            let id = p.fresh_id("p");
+            p.parts.insert(
+                i + 1,
+                Part {
+                    id: id.clone(),
+                    content,
+                },
+            );
+            return Ok(Some(id));
+        }
     }
     Ok(None)
 }
@@ -712,6 +820,35 @@ fn prune_values(p: &mut Project, module: &ModuleRef) {
         inst.column_order.retain(|path, _| is_table(path));
         inst.columns.retain(|path, _| is_table(path));
     }
+}
+
+/// Erste Zeile einer Tabelle kann nicht mit einer darüber verbunden sein.
+fn normalize(rows: &mut [Row]) {
+    if let Some(first) = rows.first_mut() {
+        first.merged.clear();
+    }
+}
+
+/// Bereitet das Entfernen oder Verschieben der Zeile `i` vor: Ist sie
+/// oberste Zelle eines Blocks, übernimmt die nächste Zeile Inhalt und Rolle.
+fn detach(rows: &mut [Row], i: usize) {
+    if i + 1 < rows.len() {
+        let (head, tail) = rows.split_at_mut(i + 1);
+        let (this, next) = (&mut head[i], &mut tail[0]);
+        let promoted: Vec<Id> = next
+            .merged
+            .iter()
+            .filter(|c| !this.merged.contains(*c))
+            .cloned()
+            .collect();
+        for c in promoted {
+            next.merged.remove(&c);
+            if let Some(v) = this.cells.get(&c) {
+                next.cells.insert(c.clone(), v.clone());
+            }
+        }
+    }
+    rows[i].merged.clear();
 }
 
 /// Pfadpräfix eines Elements: `a/b/tabelle` → `a/b/`.

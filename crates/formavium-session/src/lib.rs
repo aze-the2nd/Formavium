@@ -5,6 +5,7 @@
 //! Dev-Bridge für den Browser nutzen dieselbe Schnittstelle.
 
 mod libview;
+mod sync;
 mod texcache;
 mod views;
 
@@ -152,6 +153,12 @@ impl Session {
                 let path: PathBuf = arg(args, "path")?;
                 let template: String = arg(args, "template")?;
                 self.new_document(&path, &template)?;
+                self.doc_json()?
+            }
+            // Dokument als freies LaTeX weiterführen: neue Datei, Original bleibt.
+            "to_free_copy" => {
+                let path: PathBuf = arg(args, "path")?;
+                self.save_free_copy(&path)?;
                 self.doc_json()?
             }
             "close" => {
@@ -366,6 +373,38 @@ impl Session {
                 self.doc_json()?
             }
             "preview" => serde_json::to_value(self.preview()?).map_err(|e| e.to_string())?,
+            // --- Zuordnung PDF ↔ Dokument (SyncTeX des angezeigten PDFs) ---
+            "sync" => match self.shown_sync() {
+                Some((rev, g, map)) => {
+                    let mut out = sync::overview(&g, &map);
+                    out["revision"] = json!(rev);
+                    out["current"] = json!(rev == self.doc_ref()?.ws.revision());
+                    out
+                }
+                None => Json::Null,
+            },
+            "locate" => {
+                let page: u32 = arg(args, "page")?;
+                let x: f32 = arg(args, "x")?;
+                let y: f32 = arg(args, "y")?;
+                match self.shown_sync() {
+                    Some((rev, g, map)) => match sync::locate(&g, &map, page, x, y) {
+                        Some(mut hit) => {
+                            hit["current"] = json!(rev == self.doc_ref()?.ws.revision());
+                            hit
+                        }
+                        None => Json::Null,
+                    },
+                    None => Json::Null,
+                }
+            }
+            "highlight" => {
+                let targets: Vec<sync::Target> = arg(args, "targets")?;
+                match self.shown_sync() {
+                    Some((_, g, map)) => json!(sync::highlight(&g, &map, &targets)),
+                    None => json!([]),
+                }
+            }
             "save_pdf" => {
                 let path: PathBuf = arg(args, "path")?;
                 let doc = self.doc_ref()?;
@@ -458,6 +497,35 @@ impl Session {
         self.open(path)
     }
 
+    fn save_free_copy(&mut self, path: &Path) -> R<()> {
+        let path = &own_folder(path);
+        if path.exists() {
+            return Err(format!("{} existiert bereits", path.display()));
+        }
+        let doc = self.doc_ref()?;
+        let mut free = doc.ws.project().clone();
+        free.preamble = doc.generated.text.clone();
+        free.parts.clear();
+        free.modules.clear();
+        free.free = true;
+        free.title = format!("{} (LaTeX)", free.title);
+        let from = project_dir(&doc.path);
+        let to = project_dir(path);
+        for rel in &doc.generated.resources {
+            let src = from.join(rel);
+            if src.is_file() {
+                let dst = to.join(rel);
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+        io::save(path, &free, None).map_err(|e| e.to_string())?;
+        self.open(path)
+    }
+
     /// Untermodule, die mit einem Bibliotheksmodul ins Dokument müssen.
     fn requires(&self, def: &ModuleDef) -> R<Vec<ModuleDef>> {
         let known = self
@@ -504,6 +572,7 @@ impl Session {
             version: 1,
             name: name.to_owned(),
             description: String::new(),
+            preamble: String::new(),
             fields: vec![field("titel", "Titel", name), field("text", "Text", "Text")],
             body: vec![
                 Element {
@@ -688,6 +757,21 @@ impl Session {
                 .as_ref()
                 .map(|o| (o.revision, o.duration_ms, o.warnings)),
         ))
+    }
+
+    /// Revision, erzeugter Quelltext und SyncTeX des angezeigten PDFs.
+    fn shown_sync(&mut self) -> Option<(Revision, Arc<Generated>, Arc<formavium_render::SyncMap>)> {
+        let doc = self.doc.as_mut()?;
+        drain(doc);
+        let shown = doc.preview.shown()?;
+        let map = shown.pdf.sync.clone()?;
+        let rev = shown.revision;
+        let g = doc
+            .history
+            .iter()
+            .find(|(r, _)| *r == rev)
+            .map(|(_, g)| Arc::clone(g))?;
+        Some((rev, g, map))
     }
 
     fn doc_json(&self) -> R<Json> {

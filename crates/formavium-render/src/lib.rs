@@ -10,6 +10,7 @@
 mod diagnostics;
 mod preview;
 mod scheduler;
+mod synctex;
 mod tectonic;
 
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use std::time::Duration;
 pub use diagnostics::{parse_tectonic_output, Diagnostic, Severity};
 pub use preview::{Preview, PreviewStatus, ShownPdf};
 pub use scheduler::Renderer;
+pub use synctex::{SyncBox, SyncMap};
 pub use tectonic::{locate_tectonic, TectonicEngine};
 
 use formavium_core::Revision;
@@ -54,10 +56,12 @@ impl RenderRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderedPdf {
     pub bytes: Arc<Vec<u8>>,
     pub sha256: String,
+    /// Zuordnung von PDF-Stellen zu Zeilen von `main.tex`, falls vorhanden.
+    pub sync: Option<Arc<SyncMap>>,
 }
 
 impl RenderedPdf {
@@ -67,6 +71,7 @@ impl RenderedPdf {
         RenderedPdf {
             bytes: Arc::new(bytes),
             sha256,
+            sync: None,
         }
     }
 }

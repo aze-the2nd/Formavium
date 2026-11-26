@@ -4,7 +4,7 @@ use formavium_core::Revision;
 
 use crate::{CompileFailure, RenderOutcome, RenderedPdf};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ShownPdf {
     pub revision: Revision,
     pub pdf: RenderedPdf,

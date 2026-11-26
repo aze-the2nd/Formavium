@@ -213,7 +213,15 @@ fn map_span(
                 _ => return None,
             };
             let r = rows.iter_mut().find(|r| &r.id == row)?;
-            r.cells.insert(column.clone(), unescape_text(&new_text));
+            // LaTeX-Spalten nehmen den Text, wie er steht.
+            let latex =
+                crate::latex::table_column(project, part, path, column).is_some_and(|c| c.latex);
+            let value = if latex {
+                new_text
+            } else {
+                unescape_text(&new_text)
+            };
+            r.cells.insert(column.clone(), value);
             Command::SetValue {
                 part: part.clone(),
                 path: path.clone(),

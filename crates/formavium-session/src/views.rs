@@ -17,6 +17,8 @@ use serde::Serialize;
 pub struct DocView {
     pub path: String,
     pub title: String,
+    /// Freies LaTeX-Dokument (Nerd-Modus).
+    pub free: bool,
     pub revision: Revision,
     pub dirty: bool,
     pub can_undo: bool,
@@ -224,6 +226,7 @@ pub fn doc_view(
     DocView {
         path: path.display().to_string(),
         title: p.title.clone(),
+        free: p.free,
         revision: ws.revision(),
         dirty: ws.is_dirty(),
         can_undo: ws.can_undo(),

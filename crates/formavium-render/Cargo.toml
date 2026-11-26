@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 formavium-core.workspace = true
 sha2.workspace = true
+flate2 = "1"
 tempfile.workspace = true
 thiserror.workspace = true
 
