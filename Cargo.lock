@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "formavium-app"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "formavium-render",
  "formavium-session",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "formavium-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "formavium-core",
  "formavium-render",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "formavium-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "formavium-render"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "flate2",
  "formavium-core",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "formavium-session"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "formavium-core",
