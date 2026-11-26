@@ -79,6 +79,25 @@ fn pdf_positions_map_to_cells_and_back() {
     assert_eq!(hit["row"], "r2");
     assert_eq!(hit["column"], "menge");
 
+    // Letzte Spalte: SyncTeX ordnet sie der Folgezeile zu.
+    let rects = s
+        .call(
+            "highlight",
+            &json!({ "targets": [{ "part": "p2", "path": "zeilen", "row": "r1", "column": "laenge" }] }),
+        )
+        .unwrap();
+    let r = rects[0].as_array().unwrap();
+    let w = r[3].as_f64().unwrap();
+    assert!(w < 100.0, "nur die Zelle, nicht die ganze Zeile: {r:?}");
+    let hit = s
+        .call(
+            "locate",
+            &json!({ "page": 1, "x": r[1].as_f64().unwrap() + w / 2.0, "y": r[2].as_f64().unwrap() + r[4].as_f64().unwrap() / 2.0 }),
+        )
+        .unwrap();
+    assert_eq!(hit["column"], "laenge", "{hit}");
+    assert_eq!(hit["row"], "r1", "{hit}");
+
     // Feld: die Überschrift des zweiten Moduls.
     let rects = s
         .call(

@@ -58,28 +58,41 @@ fn origin_json(origin: &Origin) -> Json {
 /// Was an einer Stelle des PDFs steht.
 pub fn locate(g: &Generated, map: &SyncMap, page: u32, x: f32, y: f32) -> Option<Json> {
     let hit = map.hit(page, x, y)?;
-    let line = hit.line;
-    let from = line_start(&g.text, line)?;
-    let to = line_end(&g.text, from);
-    // Tabellenzeile: die k-te Zellbox ist die k-te Spalte.
+    let mut line = hit.line;
+    // Tabellenzeile: die k-te Zellbox ist die k-te Spalte. Die letzte Zelle
+    // trägt die Folgezeile, deshalb auch die Zeile davor prüfen.
     let mut origin = None;
     if hit.hbox {
-        let cells = map.cells(page, line);
-        if cells.len() > 1 {
-            if let Some(k) = cells
+        for candidate in [hit.line, hit.line.saturating_sub(1)] {
+            let cells = map.cells(page, candidate);
+            if cells.len() < 2 {
+                continue;
+            }
+            let Some(k) = cells
                 .iter()
                 .position(|b| (b.x - hit.x).abs() < 0.01 && (b.w - hit.w).abs() < 0.01)
-            {
-                origin = g
-                    .spans
-                    .iter()
-                    .filter(|s| s.start >= from && s.start <= to)
-                    .filter(|s| matches!(s.origin, Origin::Cell { .. }))
-                    .find(|s| column_index(g, s.start, from) == k)
-                    .map(|s| &s.origin);
+            else {
+                continue;
+            };
+            let Some(from) = line_start(&g.text, candidate) else {
+                continue;
+            };
+            let to = line_end(&g.text, from);
+            origin = g
+                .spans
+                .iter()
+                .filter(|s| s.start >= from && s.start <= to)
+                .filter(|s| matches!(s.origin, Origin::Cell { .. }))
+                .find(|s| column_index(g, s.start, from) == k)
+                .map(|s| &s.origin);
+            if origin.is_some() {
+                line = candidate;
+                break;
             }
         }
     }
+    let from = line_start(&g.text, line)?;
+    let to = line_end(&g.text, from);
     // Sonst ein Eingabefeld auf dieser Zeile (etwa der Text einer
     // Überschrift hinter `\section{`), zuletzt der Teil.
     let origin = origin

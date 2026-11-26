@@ -74,9 +74,9 @@
   }
 </script>
 
-<svelte:element this={list.ordered ? 'ol' : 'ul'} class="list" bind:this={root}>
+<svelte:element this={list.ordered ? 'ol' : 'ul'} class="list" bind:this={root} data-list={list.path}>
   {#each list.items as item, i (item.id)}
-    <li oncontextmenu={(e) => menu(e, i)}>
+    <li oncontextmenu={(e) => menu(e, i)} data-item={item.id}>
       <EditableText
         multiline
         value={item.text}

@@ -33,6 +33,8 @@ export type ModuleDef = {
   version: number;
   name: string;
   description?: string;
+  /** LaTeX für den Dokumentkopf, das das Modul braucht. */
+  preamble?: string;
   fields: FieldDef[];
   body: ElementDef[];
 };

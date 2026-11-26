@@ -190,6 +190,16 @@
   }
 
   const addable: Kind[] = ['heading', 'paragraph', 'list', 'table', 'image', 'latex', 'row'];
+  const glyph: Record<Kind, string> = {
+    heading: 'H',
+    paragraph: '¶',
+    list: '•',
+    table: '▦',
+    image: '▣',
+    latex: 'TeX',
+    row: '⫴',
+    module: '◇',
+  };
   const addItems = (into?: string): MenuItem[] => [
     { heading: into ? 'In die Reihe einfügen' : 'Element hinzufügen' },
     ...addable
@@ -545,6 +555,23 @@
       <button class="primary small" disabled={!canPublish || !status?.local} onclick={onPublish}>In Bibliothek speichern</button>
     </div>
 
+    {#if status?.local && def.version === 1}
+      <ol class="steps" aria-label="So entsteht ein Modul">
+        <li class:done={def.name.trim() !== '' && def.name !== 'Neues Modul'}>
+          <strong>Name</strong> oben vergeben, dazu eine kurze Beschreibung für die Auswahl.
+        </li>
+        <li class:done={def.body.length > 0}>
+          <strong>Aufbau</strong> aus Bausteinen zusammenstellen. Jede Änderung erscheint sofort im Dokument und im PDF.
+        </li>
+        <li class:done={def.fields.length > 0}>
+          <strong>Eingabefelder</strong> festlegen: Was soll der Anwender ausfüllen? Bei Überschrift und Text „Eingabefeld“ einschalten, im LaTeX Text markieren.
+        </li>
+        <li class:done={!status?.local}>
+          <strong>In Bibliothek speichern</strong>, dann steht das Modul in jedem Dokument unter Strg+M bereit.
+        </li>
+      </ol>
+    {/if}
+
     <h3>Aufbau</h3>
     <div class="body">
       {#each def.body as el (el.id)}
@@ -553,7 +580,30 @@
         <p class="empty">Noch keine Elemente.</p>
       {/each}
     </div>
-    <button class="add" onclick={(e) => openMenuBelow(e.currentTarget, addItems())}>+ Element</button>
+    <div class="palette" role="group" aria-label="Baustein hinzufügen">
+      {#each addable as k}
+        <button class="block" title="{kindName[k]} am Ende hinzufügen" onclick={() => add(k)}>
+          <span class="glyph" aria-hidden="true">{glyph[k]}</span>{kindName[k]}
+        </button>
+      {/each}
+    </div>
+
+    <details class="pre" open={!!def.preamble}>
+      <summary>Vorspann <span class="muted">LaTeX für den Dokumentkopf</span></summary>
+      <p class="muted">
+        Pakete und eigene Befehle, die dieses Modul braucht. Befehle mit <code>\providecommand</code> definieren, dann
+        kann eine Vorlage sie vorgeben. So funktioniert das Modul in jedem Dokument.
+      </p>
+      <div class="code">
+        <EditableText
+          multiline
+          value={def.preamble ?? ''}
+          label="Vorspann des Moduls"
+          placeholder={'\\usepackage{xcolor}\n\\providecommand{\\meinbefehl}[1]{\\textbf{#1}}'}
+          onCommit={(v: string) => mutate((d) => (d.preamble = v.trim()))}
+        />
+      </div>
+    </details>
 
     {#if def.fields.length}
       <h3>Eingabefelder</h3>
@@ -776,7 +826,82 @@
   code {
     font-family: var(--mono);
   }
-  .add,
+  .steps {
+    margin: 12px 0 0;
+    padding: 10px 12px 10px 30px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-2);
+  }
+  .steps li.done {
+    color: var(--muted);
+    text-decoration: line-through;
+    text-decoration-color: var(--line-strong);
+  }
+  .steps li.done::marker {
+    content: '✓  ';
+    color: var(--ok);
+  }
+  .palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .block {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 4px 9px 4px 5px;
+    cursor: pointer;
+  }
+  .block:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .glyph {
+    min-width: 20px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    border-radius: 5px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--accent-strong);
+  }
+  .pre {
+    margin-top: 16px;
+  }
+  .pre summary {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .pre summary .muted {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+  .pre p {
+    margin: 6px 0;
+    font-size: 11.5px;
+  }
+  .muted {
+    color: var(--muted);
+  }
   .add-line {
     font: inherit;
     font-size: 12px;
@@ -788,11 +913,6 @@
     text-align: left;
     justify-self: start;
   }
-  .add {
-    margin-top: 6px;
-    font-weight: 600;
-  }
-  .add:hover,
   .add-line:hover {
     text-decoration: underline;
   }

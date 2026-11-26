@@ -21,7 +21,7 @@
 </script>
 
 {#if el.kind === 'heading'}
-  <div class="heading h{Math.min(Math.max(el.level, 1), 3)}">
+  <div class="heading h{Math.min(Math.max(el.level, 1), 3)}" data-field={el.field}>
     {#if el.field}
       {@const field = el.field}
       <EditableText
@@ -35,7 +35,7 @@
     {/if}
   </div>
 {:else if el.kind === 'paragraph'}
-  <div class="paragraph">
+  <div class="paragraph" data-field={el.field}>
     {#if el.field}
       {@const field = el.field}
       <EditableText
@@ -52,7 +52,9 @@
 {:else if el.kind === 'table'}
   <TableView t={el} {part} {onCommand} />
 {:else if el.kind === 'image'}
-  <ImageView {part} field={el.field} value={el.value} width={el.width} {onCommand} {onImage} />
+  <div data-field={el.field}>
+    <ImageView {part} field={el.field} value={el.value} width={el.width} {onCommand} {onImage} />
+  </div>
 {:else if el.kind === 'row'}
   <div class="row" style:grid-template-columns="repeat({el.children.length}, minmax(0, 1fr))">
     {#each el.children as child}

@@ -12,6 +12,11 @@
   import Picker, { type PickerMode } from './lib/Picker.svelte';
   import Shortcuts from './lib/Shortcuts.svelte';
   import Workshop from './lib/Workshop.svelte';
+  import LatexRef from './lib/LatexRef.svelte';
+  import Guide from './lib/Guide.svelte';
+  import TemplateDialog from './lib/TemplateDialog.svelte';
+  import { editor, requestFocus, sameTargets, setTableMode, type Target, type TableMode } from './lib/editor.svelte';
+  import type { Mark } from './lib/PdfView.svelte';
   import { runShortcut, type Cmd } from './lib/commands';
   import { confirmDialog, promptDialog } from './lib/dialogs.svelte';
   import { REPO, openInBrowser } from './lib/feedback';
@@ -41,6 +46,10 @@
   let preview = $state<Preview | null>(null);
   let sourceView = $state<SourceView>();
   let visualView = $state<VisualView>();
+  let pdfView = $state<PdfView>();
+  let showRef = $state(false);
+  let showGuide = $state(false);
+  let showTemplate = $state(false);
   let showKeys = $state(false);
   let showPalette = $state(false);
   let showFeedback = $state(false);
@@ -225,6 +234,32 @@
     }
   }
 
+  /** Dieses Dokument als freies LaTeX weiterführen (Nerd-Modus); das Original bleibt. */
+  async function freeCopy() {
+    if (!doc || doc.free) return;
+    if (!(await mayLeave())) return;
+    const ok = await confirmDialog({
+      title: 'Als freies LaTeX weiterführen',
+      message:
+        'Formavium legt eine Kopie als freies LaTeX-Dokument an (Nerd-Modus). Dort schreibst du den Quelltext frei, ohne Module und ohne Schutz. Dieses Dokument bleibt unverändert.',
+      okLabel: 'Kopie anlegen …',
+    });
+    if (!ok) return;
+    const path = await pickSave('Freie LaTeX-Kopie speichern', fvm, doc.path.replace(/\.fvm$/, '-latex.fvm'));
+    if (!path) return;
+    const d = await guarded(() => call<Doc>('to_free_copy', { path }));
+    if (d) {
+      closeWorkshop();
+      opened(d);
+      notify('info', `Freie Kopie angelegt: ${d.path}`);
+    }
+  }
+
+  async function newFree() {
+    const t = library?.templates.find((x) => x.id === 'freies-latex');
+    if (t) await newFromTemplate(t);
+  }
+
   async function closeDoc() {
     if (!doc || !(await mayLeave())) return;
     await guarded(() => call('close'));
@@ -366,21 +401,14 @@
 
   async function saveTemplate() {
     if (!doc) return;
-    const title = await promptDialog({
-      title: 'Als Vorlage speichern',
-      message: 'Name der Vorlage. Aufbau, Module und Seitenlayout werden übernommen.',
-      value: doc.title,
-    });
-    if (!title?.trim()) return;
-    const clear = await confirmDialog({
-      title: 'Eingaben in der Vorlage',
-      message: 'Sollen die ausgefüllten Inhalte in der Vorlage stehen bleiben? Geleerte Felder zeigen in neuen Dokumenten die Vorgaben der Module.',
-      okLabel: 'Felder leeren',
-      cancelLabel: 'Inhalte behalten',
-    });
-    const r = await guarded(() => call<{ id: string }>('save_template', { title, description: '', keep_values: !clear }));
+    showTemplate = true;
+  }
+
+  async function storeTemplate(title: string, description: string, keepValues: boolean) {
+    const r = await guarded(() => call<{ id: string }>('save_template', { title, description, keep_values: keepValues }));
     if (r) {
-      notify('info', `Vorlage „${title.trim()}“ gespeichert.`);
+      showTemplate = false;
+      notify('info', `Vorlage „${title.trim()}“ gespeichert. Sie steht unter Datei → Neu aus Vorlage.`);
       loadLibrary();
     }
   }
@@ -516,7 +544,11 @@
   }
 
   let layout = $state(loadLayout());
-  let visible = $derived(layout.order.filter((k) => layout.show[k]));
+  let visible = $derived.by(() => {
+    const keys = layout.order.filter((k) => layout.show[k] && !(doc?.free && k === 'visual'));
+    // Nerd-Modus: Quelltext und PDF, auch wenn sie ausgeblendet waren.
+    return keys.length ? keys : (['source', 'pdf'] as PaneKey[]);
+  });
   let panesEl = $state<HTMLElement>();
 
   $effect(() => {
@@ -637,6 +669,203 @@
     layout.size[b] = half;
   }
 
+  // --- Tabellenbearbeitung ---
+
+  const tableModes: [TableMode, string, string][] = [
+    ['inline', 'Direkt', 'Zellen direkt in der Tabelle bearbeiten'],
+    ['grid', 'Raster', 'Raster mit Spalten A, B, C, Zeilennummern und Eingabezeile'],
+    ['inspector', 'Zelleditor', 'Zelle unten im Zelleditor mit Vorschau bearbeiten'],
+  ];
+
+  // --- PDF ↔ Editor: SyncTeX ---
+
+  type SyncData = {
+    revision: number;
+    current: boolean;
+    pages: number;
+    lines: ([number, number] | null)[];
+    parts: [string, number, number][];
+  };
+  let syncData = $state<SyncData | null>(null);
+  let marks = $state<Mark[]>([]);
+
+  // Neue Vorschau: Zuordnung neu laden.
+  $effect(() => {
+    const rev = preview?.shown_revision;
+    if (!rev || !doc) {
+      syncData = null;
+      return;
+    }
+    call<SyncData | null>('sync')
+      .then((d) => (syncData = d))
+      .catch(() => (syncData = null));
+  });
+
+  /** Seitenbereich je Teil, für Seitenmarken im visuellen Editor. */
+  let partPages = $derived.by(() => {
+    if (!syncData) return null;
+    const out: Record<string, [number, number]> = {};
+    for (const [id, l0, l1] of syncData.parts) {
+      let min = Infinity;
+      let max = 0;
+      for (let l = l0; l <= l1; l++) {
+        const at = syncData.lines[l];
+        if (at) {
+          min = Math.min(min, at[0]);
+          max = Math.max(max, at[0]);
+        }
+      }
+      if (max) out[id] = [min, max];
+    }
+    return out;
+  });
+
+  // Gewählte Stelle im Editor: im PDF markieren.
+  let markTimer: ReturnType<typeof setTimeout>;
+  let lastTargets: Target[] = [];
+  $effect(() => {
+    const targets = editor.focus;
+    void syncData;
+    clearTimeout(markTimer);
+    markTimer = setTimeout(async () => {
+      if (!targets.length) {
+        marks = [];
+        return;
+      }
+      const changed = !sameTargets(targets, lastTargets);
+      lastTargets = targets;
+      marks = (await call<Mark[]>('highlight', { targets }).catch(() => [])) ?? [];
+      if (changed && !syncScroll) pdfView?.revealMarks();
+    }, 120);
+  });
+
+  // Für Tests im Browser während der Entwicklung.
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__formavium = { locate: (p: number, x: number, y: number) => locate(p, x, y) };
+
+  /** Klick im PDF: zum Feld oder zur Zelle im Editor springen. */
+  async function locate(page: number, x: number, y: number) {
+    const hit = await call<{
+      kind: string;
+      part?: string;
+      path?: string;
+      row?: string;
+      column?: string;
+      line: number;
+      current: boolean;
+    } | null>('locate', { page, x, y }).catch(() => null);
+    if (!hit) return;
+    const visualShown = visible.includes('visual');
+    if (hit.part && visualShown) {
+      requestFocus({ part: hit.part, path: hit.path, row: hit.row, column: hit.column });
+    } else if (visible.includes('source') && hit.current) {
+      sourceView?.jumpToLine(hit.line);
+    } else if (!doc?.free && hit.part) {
+      layout.show.visual = true;
+      requestFocus({ part: hit.part, path: hit.path, row: hit.row, column: hit.column });
+    } else {
+      layout.show.source = true;
+      queueMicrotask(() => sourceView?.jumpToLine(hit.line));
+    }
+  }
+
+  // --- Synchrones Scrollen ---
+
+  function loadSync() {
+    try {
+      return localStorage.getItem('formavium.syncScroll') !== 'false';
+    } catch {
+      return true;
+    }
+  }
+  let syncScroll = $state(loadSync());
+  function setSyncScroll(on: boolean) {
+    syncScroll = on;
+    try {
+      localStorage.setItem('formavium.syncScroll', String(on));
+    } catch {
+      /* nur für diese Sitzung */
+    }
+  }
+
+  let driver: PaneKey | null = null;
+  let driverAt = 0;
+  function interact(key: PaneKey) {
+    driver = key;
+    driverAt = performance.now();
+  }
+  let syncFrame = 0;
+  function scrolled(key: PaneKey) {
+    if (!syncScroll || driver !== key || performance.now() - driverAt > 1500) return;
+    cancelAnimationFrame(syncFrame);
+    syncFrame = requestAnimationFrame(() => follow(key));
+  }
+
+  /** Zeile des erzeugten Quelltexts am oberen Rand der Ansicht. */
+  function lineOf(key: PaneKey): number | null {
+    if (!doc) return null;
+    if (key === 'source') return sourceView?.topLine() ?? null;
+    if (key === 'visual') {
+      const pos = visualView?.topPosition();
+      if (!pos) return null;
+      const i = doc.parts.findIndex((p) => p.id === pos.part);
+      if (i < 0) return null;
+      const start = doc.parts[i].line;
+      const end = doc.parts[i + 1]?.line ?? start + 1;
+      return start + pos.fraction * (end - start);
+    }
+    const pt = pdfView?.topPoint();
+    if (!pt || !syncData) return null;
+    let best: number | null = null;
+    let bestAt: [number, number] | null = null;
+    syncData.lines.forEach((at, line) => {
+      if (!at) return;
+      const before = at[0] < pt.page || (at[0] === pt.page && at[1] <= pt.y);
+      if (before && (!bestAt || at[0] > bestAt[0] || (at[0] === bestAt[0] && at[1] >= bestAt[1]))) {
+        best = line;
+        bestAt = at;
+      }
+    });
+    return best;
+  }
+
+  /** Stelle im PDF zu einer (gebrochenen) Zeile. */
+  function pointOf(line: number): { page: number; y: number } | null {
+    if (!syncData) return null;
+    const L = syncData.lines;
+    const base = Math.floor(line);
+    let prev = base;
+    while (prev > 0 && !L[prev]) prev--;
+    let next = base + 1;
+    while (next < L.length && !L[next]) next++;
+    const a = L[prev];
+    const b = L[next];
+    if (!a) return b ? { page: b[0], y: b[1] } : null;
+    if (!b || b[0] !== a[0]) return { page: a[0], y: a[1] };
+    const f = (line - prev) / Math.max(1, next - prev);
+    return { page: a[0], y: a[1] + f * (b[1] - a[1]) };
+  }
+
+  function follow(from: PaneKey) {
+    const line = lineOf(from);
+    if (line === null || !doc) return;
+    for (const key of visible) {
+      if (key === from) continue;
+      if (key === 'source') sourceView?.scrollToLine(line);
+      else if (key === 'visual') {
+        const parts = doc.parts;
+        let i = parts.length - 1;
+        while (i > 0 && parts[i].line > line) i--;
+        if (i < 0) continue;
+        const start = parts[i].line;
+        const end = parts[i + 1]?.line ?? start + 1;
+        visualView?.scrollToPart(parts[i].id, Math.max(0, Math.min(1, (line - start) / Math.max(1, end - start))));
+      } else {
+        const pt = pointOf(line);
+        if (pt) pdfView?.scrollToPoint(pt.page, pt.y);
+      }
+    }
+  }
+
   // --- Navigation ---
 
   function jump(offset: number) {
@@ -683,12 +912,15 @@
       { id: 'pdf', title: 'Als PDF speichern …', group: 'Datei', keys: 'Strg+P', divider: true, enabled: has && !!preview?.shown_revision, run: savePdf },
       { id: 'export', title: 'LaTeX exportieren …', group: 'Datei', keys: 'Strg+Umschalt+E', enabled: has, run: exportLatex },
       { id: 'template', title: 'Als Vorlage speichern …', group: 'Datei', divider: true, enabled: has, run: saveTemplate },
+      { id: 'free-copy', title: 'Als freies LaTeX weiterführen …', group: 'Datei', enabled: has && !doc?.free, run: freeCopy },
+      { id: 'free-new', title: 'Neues freies LaTeX-Dokument (Nerd-Modus) …', group: 'Datei', paletteOnly: true, run: newFree },
       { id: 'rename', title: 'Titel ändern …', group: 'Datei', enabled: has, run: renameDoc },
       { id: 'close', title: 'Dokument schließen', group: 'Datei', keys: 'Strg+W', divider: true, enabled: has, run: closeDoc },
 
-      { id: 'insert-module', title: 'Modul aus der Bibliothek …', group: 'Einfügen', keys: 'Strg+M', enabled: has, run: () => pickModule() },
-      { id: 'insert-latex', title: 'LaTeX-Abschnitt', group: 'Einfügen', enabled: has, run: insertLatex },
-      { id: 'new-module', title: 'Neues Modul erstellen …', group: 'Einfügen', divider: true, enabled: has, run: () => newModule() },
+      { id: 'insert-module', title: 'Modul aus der Bibliothek …', group: 'Einfügen', keys: 'Strg+M', enabled: has && !doc?.free, run: () => pickModule() },
+      { id: 'insert-latex', title: 'LaTeX-Abschnitt', group: 'Einfügen', enabled: has && !doc?.free, run: insertLatex },
+      { id: 'new-module', title: 'Neues Modul erstellen …', group: 'Einfügen', divider: true, enabled: has && !doc?.free, run: () => newModule() },
+      { id: 'latex-ref', title: 'LaTeX-Befehle nachschlagen …', group: 'Einfügen', keys: 'Strg+Umschalt+L', divider: true, run: () => (showRef = true) },
       ...(library?.modules ?? [])
         .filter((m) => m.latest)
         .map(
@@ -733,9 +965,23 @@
         }),
       ),
       { id: 'layout-reset', title: 'Anordnung zurücksetzen', group: 'Ansicht', divider: true, run: () => (layout = defaultLayout()) },
+      { id: 'sync-scroll', title: 'Ansichten synchron scrollen', group: 'Ansicht', checked: syncScroll, run: () => setSyncScroll(!syncScroll) },
+      ...tableModes.map(
+        ([mode, label], i): Cmd => ({
+          id: `table-mode:${mode}`,
+          title: `Tabellen: ${label}`,
+          group: 'Ansicht',
+          heading: i === 0 ? 'Tabellen bearbeiten' : undefined,
+          divider: i === 0,
+          checked: editor.tableMode === mode,
+          run: () => setTableMode(mode),
+        }),
+      ),
       { id: 'palette', title: 'Befehlspalette', group: 'Ansicht', keys: 'Strg+K', divider: true, run: () => (showPalette = true) },
 
+      { id: 'guide', title: 'Erste Schritte und Anleitungen', group: 'Hilfe', run: () => (showGuide = true) },
       { id: 'keys', title: 'Tastenkürzel', group: 'Hilfe', keys: 'F1', run: () => (showKeys = !showKeys) },
+      { id: 'ref', title: 'LaTeX-Befehle', group: 'Hilfe', run: () => (showRef = true) },
       { id: 'feedback', title: 'Feedback senden …', group: 'Hilfe', keys: 'Strg+Umschalt+F', run: () => (showFeedback = true) },
       { id: 'update', title: 'Nach Updates suchen', group: 'Hilfe', divider: true, run: searchUpdate },
       { id: 'about', title: 'Über Formavium', group: 'Hilfe', run: about },
@@ -771,6 +1017,7 @@
       {#if doc}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span class="name" title="Doppelklick ändert den Titel" ondblclick={renameDoc}>{doc.title}</span>
+        {#if doc.free}<span class="nerd" title="Freies LaTeX-Dokument: alles im Quelltext, ohne Module">Nerd-Modus</span>{/if}
         {#if doc.dirty}<span class="dirty" title="Ungespeicherte Änderungen">●</span>{/if}
         <span class="path" title={doc.path}>{doc.path}</span>
       {/if}
@@ -836,10 +1083,47 @@
               >
             </button>
             <span class="tile-title">{paneTitle[key]}</span>
+            {#if key === 'visual'}
+              <span class="tile-spacer"></span>
+              <span class="modes" role="radiogroup" aria-label="Tabellen bearbeiten">
+                {#each tableModes as [mode, label, hint]}
+                  <button
+                    role="radio"
+                    aria-checked={editor.tableMode === mode}
+                    class:on={editor.tableMode === mode}
+                    title={hint}
+                    onclick={() => setTableMode(mode)}>{label}</button
+                  >
+                {/each}
+              </span>
+            {:else if key === 'pdf' || key === 'source'}
+              <span class="tile-spacer"></span>
+              <button
+                class="sync"
+                class:on={syncScroll}
+                title="Ansichten synchron scrollen"
+                aria-pressed={syncScroll}
+                onclick={() => setSyncScroll(!syncScroll)}>⇅ synchron</button
+              >
+            {/if}
           </header>
-          <div class="pane-body">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="pane-body"
+            onwheelcapture={() => interact(key)}
+            onpointerdowncapture={() => interact(key)}
+            onkeydowncapture={() => interact(key)}
+          >
             {#if key === 'source'}
-              <SourceView bind:this={sourceView} {doc} {errorLines} onSourceEdit={sourceEdit} onUndo={undo} onRedo={redo} />
+              <SourceView
+                bind:this={sourceView}
+                {doc}
+                {errorLines}
+                onSourceEdit={sourceEdit}
+                onUndo={undo}
+                onRedo={redo}
+                onScroll={() => scrolled('source')}
+              />
             {:else if key === 'visual'}
               <VisualView
                 bind:this={visualView}
@@ -854,9 +1138,19 @@
                 onPublish={(p) => publishModule({ id: p.module_id, version: p.version }, p.name)}
                 onUpgrade={upgradeModule}
                 onToModule={partToModule}
+                pages={partPages}
+                onScroll={() => scrolled('visual')}
               />
             {:else}
-              <PdfView {preview} revision={doc.revision} onDiag={jumpDiag} />
+              <PdfView
+                bind:this={pdfView}
+                {preview}
+                revision={doc.revision}
+                {marks}
+                onDiag={jumpDiag}
+                onLocate={locate}
+                onScroll={() => scrolled('pdf')}
+              />
             {/if}
           </div>
         </section>
@@ -973,6 +1267,21 @@
     onRevealDir={isTauri ? revealLibrary : undefined}
   />
   <Menu />
+  <LatexRef bind:open={showRef} source={doc?.source ?? ''} />
+  <Guide
+    bind:open={showGuide}
+    hasDoc={!!doc}
+    onAction={(a) => {
+      showGuide = false;
+      if (a === 'template') openPicker({ kind: 'template' });
+      else if (a === 'module') newModule();
+      else if (a === 'save-template') saveTemplate();
+      else if (a === 'free') newFree();
+      else if (a === 'library') openPicker({ kind: 'manage' });
+      else if (a === 'ref') showRef = true;
+    }}
+  />
+  <TemplateDialog bind:open={showTemplate} title={doc?.title ?? ''} dir={library?.dir ?? null} onSave={storeTemplate} />
   <Palette bind:open={showPalette} {commands} />
   <Shortcuts bind:open={showKeys} />
   <Feedback bind:open={showFeedback} version={updateState.current} views={visible.map((k) => paneTitle[k])} />
@@ -1103,7 +1412,7 @@
     min-width: 0;
   }
   .panes.arranging {
-    cursor: grabbing;
+    cursor: var(--cur-grabbing);
     user-select: none;
   }
   .pane {
@@ -1185,12 +1494,56 @@
     border-radius: 5px;
     background: none;
     color: var(--muted);
-    cursor: grab;
+    cursor: var(--cur-grab);
     touch-action: none;
   }
   .tile .handle:hover {
     background: var(--line);
     color: var(--text);
+  }
+  .tile-spacer {
+    flex: 1;
+  }
+  .modes {
+    display: flex;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1px;
+  }
+  .modes button,
+  .sync {
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .modes button:hover,
+  .sync:hover {
+    color: var(--text);
+  }
+  .modes button.on {
+    background: var(--panel);
+    border-color: var(--line);
+    color: var(--text);
+  }
+  .sync.on {
+    color: var(--accent-strong);
+  }
+  .nerd {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 1px 6px;
   }
   .tile-title {
     font-size: 11px;
@@ -1207,7 +1560,7 @@
     flex: 0 0 5px;
     margin: 0 -2px;
     z-index: 4;
-    cursor: col-resize;
+    cursor: var(--cur-col-resize);
     background: linear-gradient(to right, transparent 2px, var(--line) 2px, var(--line) 3px, transparent 3px);
     touch-action: none;
   }

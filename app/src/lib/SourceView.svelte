@@ -17,6 +17,8 @@
   import { stex } from '@codemirror/legacy-modes/mode/stex';
   import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
   import { diff, type Doc } from './api';
+  import { autocompletion, completionKeymap, snippet, type Completion, type CompletionContext } from '@codemirror/autocomplete';
+  import { definedCommands, environments, latexCommands } from './latexref';
 
   type Props = {
     doc: Doc;
@@ -24,10 +26,40 @@
     onSourceEdit: (change: { base: number; from: number; to: number; insert: string }) => Promise<Doc>;
     onUndo: () => void;
     onRedo: () => void;
+    /** Vom Anwender ausgelöstes Scrollen (für die Synchronisierung). */
+    onScroll?: () => void;
   };
-  let { doc, errorLines, onSourceEdit, onUndo, onRedo }: Props = $props();
+  let { doc, errorLines, onSourceEdit, onUndo, onRedo, onScroll }: Props = $props();
 
   let host: HTMLDivElement;
+
+  // Vervollständigung: Befehle des Dokuments (Vorlage, Module) zuerst,
+  // dann häufige LaTeX-Befehle und Umgebungen.
+  let docCommands = $derived(definedCommands(doc.source));
+  const toApply = (insert: string) => snippet(insert.replace('#', '${}').replace(/\{\}/g, '{${}}'));
+  function complete(ctx: CompletionContext) {
+    const env = ctx.matchBefore(/\\begin\{[A-Za-z*]*/);
+    if (env) {
+      return {
+        from: env.from + 7,
+        options: environments.map(
+          ([name, info]): Completion => ({
+            label: name,
+            detail: info,
+            type: 'keyword',
+            apply: snippet(`${name}}\n\t\${}\n\\end{${name}}`),
+          }),
+        ),
+      };
+    }
+    const word = ctx.matchBefore(/\\[A-Za-z]*/);
+    if (!word || (word.from === word.to && !ctx.explicit)) return null;
+    const options: Completion[] = [
+      ...docCommands.map((c) => ({ label: `\\${c.name}`, detail: c.usage, info: c.info, type: 'function', boost: 2, apply: toApply(c.insert) })),
+      ...latexCommands.map((c) => ({ label: `\\${c.name}`, detail: c.usage, info: c.info, type: 'keyword', apply: toApply(c.insert) })),
+    ];
+    return { from: word.from, options, validFor: /^\\[A-Za-z]*$/ };
+  }
   let view: EditorView | undefined;
 
   // Stand des Kerns, auf dem der Editor zuletzt abgeglichen wurde.
@@ -126,6 +158,20 @@
     view.focus();
   }
 
+  /** Oberste sichtbare Zeile (für das synchrone Scrollen). */
+  export function topLine(): number {
+    if (!view) return 1;
+    const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop + 4);
+    return view.state.doc.lineAt(block.from).number;
+  }
+
+  /** Zeile an den oberen Rand scrollen, ohne den Fokus zu nehmen. */
+  export function scrollToLine(line: number) {
+    if (!view) return;
+    const n = Math.max(1, Math.min(Math.round(line), view.state.doc.lines));
+    view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(n).from, { y: 'start', yMargin: 4 }) });
+  }
+
   export function jumpToLine(line: number) {
     if (!view) return;
     const n = Math.max(1, Math.min(line, view.state.doc.lines));
@@ -150,7 +196,9 @@
           syntaxHighlighting(latexHighlight),
           EditorView.lineWrapping,
           errorField,
+          autocompletion({ override: [complete], icons: false, activateOnTyping: true }),
           keymap.of([
+            ...completionKeymap,
             // Rückgängig wirkt auf das Dokument, nicht nur auf den Editor.
             { key: 'Mod-z', run: () => (onUndo(), true), preventDefault: true },
             { key: 'Mod-y', run: () => (onRedo(), true), preventDefault: true },
@@ -162,6 +210,7 @@
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !u.transactions.some((t) => t.annotation(remote))) flush();
           }),
+          EditorView.domEventHandlers({ scroll: () => void onScroll?.() }),
         ],
       }),
     });

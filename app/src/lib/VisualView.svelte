@@ -5,8 +5,10 @@
   import { tick } from 'svelte';
   import EditableText from './EditableText.svelte';
   import ElementView from './ElementView.svelte';
+  import Inspector from './Inspector.svelte';
+  import { editor } from './editor.svelte';
   import { openMenu, openMenuBelow, type MenuItem } from './menus.svelte';
-  import type { Command, Doc, ModulePart, PartView } from './api';
+  import { call, type Command, type Doc, type El, type ModulePart, type PartView } from './api';
 
   type Props = {
     doc: Doc;
@@ -22,9 +24,26 @@
     onPublish: (p: ModulePart) => void;
     onUpgrade: (p: ModulePart) => void;
     onToModule: (p: PartView) => void;
+    /** Seitenbereich je Teil im angezeigten PDF. */
+    pages: Record<string, [number, number]> | null;
+    /** Vom Anwender ausgelöstes Scrollen (für die Synchronisierung). */
+    onScroll?: () => void;
   };
-  let { doc, errorParts, editing, onCommand, onImage, onJump, onPick, onEditModule, onPublish, onUpgrade, onToModule }: Props =
-    $props();
+  let {
+    doc,
+    errorParts,
+    editing,
+    onCommand,
+    onImage,
+    onJump,
+    onPick,
+    onEditModule,
+    onPublish,
+    onUpgrade,
+    onToModule,
+    pages,
+    onScroll,
+  }: Props = $props();
 
   let root = $state<HTMLDivElement>();
   let selected = $state<string | null>(null);
@@ -50,9 +69,25 @@
 
   const insertLatex = (index: number) => insert(index, { kind: 'latex', source: 'Neuer Abschnitt.\n' });
 
+  /** Neue Verwendung desselben Moduls wie Teil `p`, ob in der Bibliothek oder nicht. */
+  async function insertSame(p: ModulePart, index: number) {
+    const def = await call('module_def', { module: { id: p.module_id, version: p.version } });
+    await onCommand({ op: 'insert_module', index, def, requires: [] });
+    await focusPart(index);
+  }
+
+  async function duplicate(p: PartView, i: number) {
+    await onCommand({ op: 'duplicate_part', part: p.id });
+    await focusPart(i + 1);
+  }
+
   function insertItems(index: number): MenuItem[] {
+    const above = doc.parts[index - 1];
     return [
       { heading: 'Hier einfügen' },
+      ...(above?.kind === 'module'
+        ? [{ label: `Gleiches Modul: ${above.name}`, hint: 'leer', action: () => insertSame(above, index) }]
+        : []),
       { label: 'Modul aus der Bibliothek …', hint: 'Strg+M', action: () => onPick(index) },
       { label: 'LaTeX-Abschnitt', action: () => insertLatex(index) },
     ];
@@ -120,6 +155,8 @@
           ]
         : [{ label: 'In Modul umwandeln …', action: () => onToModule(p) }]),
       { separator: true },
+      { label: 'Duplizieren', hint: 'mit Inhalt', action: () => duplicate(p, i) },
+      ...(p.kind === 'module' ? [{ label: 'Gleiches Modul darunter', hint: 'leer', action: () => insertSame(p, i + 1) }] : []),
       { label: 'Modul darüber einfügen …', action: () => onPick(i) },
       { label: 'Modul darunter einfügen …', action: () => onPick(i + 1) },
       { label: 'LaTeX-Abschnitt darunter', action: () => insertLatex(i + 1) },
@@ -220,6 +257,118 @@
     !!drag?.active && drag.over === doc.parts.length && i === doc.parts.length - 1 && i !== drag.from;
 
   const stripNewline = (s: string) => s.replace(/\r?\n$/, '');
+
+  // --- Einklappen: Module als einzeilige Zusammenfassung ---
+
+  const collapseKey = () => `formavium.collapsed:${doc.path}`;
+  function loadCollapsed(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(collapseKey()) ?? '[]');
+    } catch {
+      return [];
+    }
+  }
+  let collapsed = $state<string[]>(loadCollapsed());
+  function toggleCollapse(id: string) {
+    collapsed = collapsed.includes(id) ? collapsed.filter((c) => c !== id) : [...collapsed, id];
+    try {
+      localStorage.setItem(collapseKey(), JSON.stringify(collapsed));
+    } catch {
+      /* nur für diese Sitzung */
+    }
+  }
+  function summary(body: El[]): string {
+    const out: string[] = [];
+    const walk = (els: El[]) => {
+      for (const el of els) {
+        if (out.join(' · ').length > 160) return;
+        if ((el.kind === 'heading' || el.kind === 'paragraph') && el.text) out.push(el.text);
+        else if (el.kind === 'latex') out.push(...el.fields.filter((f) => f.kind !== 'image' && f.value).map((f) => f.value));
+        else if (el.kind === 'table') out.push(`Tabelle ${el.rows.length} × ${el.columns.length}`);
+        else if (el.kind === 'row' || el.kind === 'module') walk(el.children);
+      }
+    };
+    walk(body);
+    return out.join(' · ');
+  }
+
+  // --- Fokus: gewählte Stelle melden, Sprünge aus dem PDF ausführen ---
+
+  function focusIn(e: FocusEvent) {
+    const target = e.target as HTMLElement;
+    // Tabellen melden ihre Zellen selbst.
+    if (target.closest('.tv')) return;
+    const li = target.closest<HTMLElement>('li.part');
+    if (!li?.dataset.part) return;
+    const field = target.closest<HTMLElement>('[data-field]')?.dataset.field;
+    const item = target.closest<HTMLElement>('[data-item]')?.dataset.item;
+    const list = target.closest<HTMLElement>('[data-list]')?.dataset.list;
+    editor.focus = [
+      item && list
+        ? { part: li.dataset.part, path: list, row: item, column: 'text' }
+        : field
+          ? { part: li.dataset.part, path: field }
+          : { part: li.dataset.part },
+    ];
+  }
+
+  $effect(() => {
+    const req = editor.request;
+    if (!req || !root) return;
+    const t = req.target;
+    tick().then(() => {
+      const li = partEl(t.part);
+      if (!li) return;
+      selected = t.part;
+      if (collapsed.includes(t.part)) toggleCollapse(t.part);
+      let el: HTMLElement | null = null;
+      if (t.row && t.path) {
+        // Listenpunkt; Tabellenzellen übernimmt die Tabelle selbst.
+        el = li.querySelector<HTMLElement>(`[data-list="${CSS.escape(t.path)}"] [data-item="${CSS.escape(t.row)}"]`);
+        if (!el) return;
+      } else if (t.path) {
+        const host = li.querySelector<HTMLElement>(`[data-field="${CSS.escape(t.path)}"]`);
+        el = host?.querySelector<HTMLElement>('input, textarea, [tabindex="0"]') ?? host ?? null;
+      }
+      const target = el ?? li;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target.closest<HTMLElement>('.frame')?.animate(
+        [{ boxShadow: '0 0 0 4px var(--accent-soft)' }, { boxShadow: '0 0 0 0 transparent' }],
+        { duration: 700 },
+      );
+    });
+  });
+
+  // --- Lage für das synchrone Scrollen ---
+
+  /** Oberster sichtbarer Teil und wie weit er schon gescrollt ist (0 bis 1). */
+  export function topPosition(): { part: string; fraction: number } | null {
+    if (!root) return null;
+    const top = root.getBoundingClientRect().top + 8;
+    for (const li of root.querySelectorAll<HTMLElement>('li.part')) {
+      const r = li.getBoundingClientRect();
+      if (r.bottom > top) {
+        return { part: li.dataset.part!, fraction: Math.min(1, Math.max(0, (top - r.top) / Math.max(1, r.height))) };
+      }
+    }
+    return null;
+  }
+
+  export function scrollToPart(id: string, fraction: number) {
+    const li = partEl(id);
+    if (!li || !root) return;
+    const offset = li.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
+    root.scrollTop = offset + fraction * li.offsetHeight - 8;
+  }
+
+  /** Seitenwechsel vor Teil `i` im angezeigten PDF. */
+  function pageBreak(i: number): number | null {
+    if (!pages || i === 0) return null;
+    const here = pages[doc.parts[i].id];
+    const before = pages[doc.parts[i - 1].id];
+    return here && before && here[0] > before[1] ? here[0] : null;
+  }
 </script>
 
 {#snippet gap(index: number, end: boolean)}
@@ -234,8 +383,9 @@
   </li>
 {/snippet}
 
+<div class="vwrap">
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="visual" bind:this={root} onkeydown={onKey}>
+<div class="visual" bind:this={root} onkeydown={onKey} onfocusin={focusIn} onscroll={() => onScroll?.()}>
   {#if doc.parts.length === 0}
     <div class="blank">
       <p>Dieses Dokument hat noch keine Abschnitte.</p>
@@ -245,12 +395,17 @@
     <ol class="parts">
       {@render gap(0, false)}
       {#each doc.parts as p, i (p.id)}
+        {@const brk = pageBreak(i)}
+        {#if brk}
+          <li class="pagebreak" role="presentation"><span>Seite {brk}</span></li>
+        {/if}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <li
           class="part"
           class:selected={selected === p.id}
           class:has-error={errorParts.includes(p.id)}
           class:editing={p.kind === 'module' && p.module === editing}
+          class:collapsed={collapsed.includes(p.id)}
           class:dragging={drag?.active && drag.id === p.id}
           class:drop-before={dropBefore(i)}
           class:drop-after={dropAfter(i)}
@@ -284,6 +439,14 @@
           <div class="frame">
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <header ondblclick={() => p.kind === 'module' && onEditModule(p)}>
+              <button
+                class="chev"
+                tabindex="-1"
+                title={collapsed.includes(p.id) ? 'Aufklappen' : 'Einklappen'}
+                aria-label={collapsed.includes(p.id) ? 'Abschnitt aufklappen' : 'Abschnitt einklappen'}
+                aria-expanded={!collapsed.includes(p.id)}
+                onclick={() => toggleCollapse(p.id)}>›</button
+              >
               {#if p.kind === 'module'}
                 <span class="badge">Modul</span>
                 <span class="name" title={p.description || undefined}>{p.name}</span>
@@ -305,11 +468,20 @@
                 <span class="badge latex">LaTeX</span>
                 <span class="name">Freier Abschnitt</span>
               {/if}
+              {#if collapsed.includes(p.id)}
+                <span class="summary">{p.kind === 'module' ? summary(p.body) : stripNewline(p.source).split('\n')[0]}</span>
+              {/if}
+              <span class="spacer"></span>
+              {#if pages?.[p.id] && pages[p.id][1] > pages[p.id][0]}
+                <span class="pages" title="Dieser Abschnitt geht im PDF über mehrere Seiten">S. {pages[p.id][0]}–{pages[p.id][1]}</span>
+              {/if}
             </header>
             {#each notices(p) as n}
               <div class="notice">{n.message}</div>
             {/each}
-            {#if p.kind === 'module'}
+            {#if collapsed.includes(p.id)}
+              <!-- eingeklappt -->
+            {:else if p.kind === 'module'}
               <div class="body">
                 {#each p.body as el}
                   <ElementView {el} part={p.id} {onCommand} {onImage} />
@@ -333,13 +505,82 @@
     </ol>
   {/if}
 </div>
+{#if editor.tableMode === 'inspector'}<Inspector />{/if}
+</div>
 
 <style>
-  .visual {
+  .vwrap {
     height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .visual {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
     padding: 6px 18px 40px 6px;
     background: var(--panel-2);
+    scrollbar-gutter: stable;
+  }
+  .pagebreak {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 2px 0 4px 22px;
+    font: 10.5px var(--ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .pagebreak::before,
+  .pagebreak::after {
+    content: '';
+    flex: 1;
+    border-top: 1px dashed var(--line-strong);
+  }
+  .chev {
+    width: 16px;
+    height: 16px;
+    margin-left: -4px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--muted);
+    font: 14px/1 var(--ui);
+    transform: rotate(90deg);
+    transition: transform 0.12s;
+    cursor: pointer;
+  }
+  .chev:hover {
+    background: var(--line);
+    color: var(--text);
+  }
+  .part.collapsed .chev {
+    transform: none;
+  }
+  .part.collapsed .frame {
+    padding-bottom: 6px;
+  }
+  .part.collapsed header {
+    margin-bottom: 0;
+  }
+  .summary {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-2);
+    font-size: 12px;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .pages {
+    font-size: 10.5px;
+    color: var(--muted);
+    white-space: nowrap;
   }
   .parts {
     list-style: none;
@@ -386,7 +627,7 @@
     border-radius: 5px;
     background: none;
     color: var(--line-strong);
-    cursor: grab;
+    cursor: var(--cur-grab);
     touch-action: none;
   }
   .handle:hover,
@@ -397,7 +638,7 @@
     background: var(--line);
   }
   .handle:active {
-    cursor: grabbing;
+    cursor: var(--cur-grabbing);
   }
 
   .frame {

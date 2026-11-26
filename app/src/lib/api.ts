@@ -12,8 +12,11 @@ export type Col = {
   unit_placement: 'header' | 'value';
   align: 'left' | 'center' | 'right';
   width: number | null;
+  /** Zellen enthalten LaTeX. */
+  latex: boolean;
 };
-export type RowView = { id: string; cells: string[] };
+/** `merged[i]`: Zelle der Spalte i ist mit der darüber verbunden. */
+export type RowView = { id: string; cells: string[]; merged: boolean[] };
 
 /** Eingabefeld innerhalb eines LaTeX-Elements. */
 export type LatexField = {
@@ -55,6 +58,8 @@ export type PartView = { kind: 'latex'; id: string; offset: number; line: number
 export type Doc = {
   path: string;
   title: string;
+  /** Freies LaTeX-Dokument (Nerd-Modus). */
+  free: boolean;
   revision: number;
   dirty: boolean;
   can_undo: boolean;
@@ -113,6 +118,10 @@ export type Command =
   | { op: 'insert_part'; index: number; content: unknown }
   | { op: 'remove_part'; part: string }
   | { op: 'move_part'; part: string; to: number }
+  | { op: 'merge_cells'; part: string; table: string; rows: string[]; columns: string[]; merge: boolean }
+  | { op: 'set_column_style'; part: string; table: string; column: string; align?: Col['align']; latex?: boolean }
+  | { op: 'duplicate_part'; part: string }
+  | { op: 'insert_module'; index: number; def: unknown; requires: unknown[] }
   | { op: 'update_module'; def: unknown }
   | { op: 'set_title'; title: string };
 

@@ -20,6 +20,14 @@
   --serif: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   --ui: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --field-hover: rgba(24, 32, 43, 0.045);
+  --grid-line: #c9d0da;
+  --grid-head: #f1f4f8;
+  --grid-head-hover: #e6ebf2;
+  --grid-index: #f6f8fa;
+  --sel-bg: rgba(47, 111, 223, 0.11);
+  --sel-anchor: rgba(47, 111, 223, 0.16);
+  --paper: #ffffff;
+  --paper-ink: #16191d;
   --hl-command: #1d4fae;
   --hl-bracket: #7a5c00;
   --hl-comment: #7a8594;
@@ -48,6 +56,12 @@
     --danger: #ff6b6b;
     --danger-soft: rgba(255, 107, 107, 0.12);
     --field-hover: rgba(230, 233, 239, 0.06);
+    --grid-line: #3a4452;
+    --grid-head: #222932;
+    --grid-head-hover: #29323d;
+    --grid-index: #1d232b;
+    --sel-bg: rgba(108, 156, 255, 0.14);
+    --sel-anchor: rgba(108, 156, 255, 0.2);
     --hl-command: #82aaff;
     --hl-bracket: #e5c07b;
     --hl-comment: #7f8899;
@@ -108,4 +122,13 @@ button.small {
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Eigene Mauszeiger im Stil der App. Rückfall auf die Systemzeiger. */
+:root {
+  --cur-grab: url("data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath d="M12 2.5l3.2 3.4h-2.1v4.9h4.9V8.7l3.4 3.3-3.4 3.3v-2.1h-4.9v4.9h2.1L12 21.5l-3.2-3.4h2.1v-4.9H6v2.1L2.6 12 6 8.7v2.1h4.9V5.9H8.8z" fill="%232f6fdf" stroke="%23fff" stroke-width="1.6" stroke-linejoin="round" paint-order="stroke"/%3E%3C/svg%3E") 12 12, move;
+  --cur-grabbing: url("data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath d="M12 2.5l3.2 3.4h-2.1v4.9h4.9V8.7l3.4 3.3-3.4 3.3v-2.1h-4.9v4.9h2.1L12 21.5l-3.2-3.4h2.1v-4.9H6v2.1L2.6 12 6 8.7v2.1h4.9V5.9H8.8z" fill="%231f3a5f" stroke="%23fff" stroke-width="1.6" stroke-linejoin="round" paint-order="stroke"/%3E%3Ccircle cx="12" cy="12" r="2.2" fill="%23fff"/%3E%3C/svg%3E") 12 12, move;
+  --cur-cell: url("data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath d="M9.5 3.5h5v6h6v5h-6v6h-5v-6h-6v-5h6z" fill="%23fff" stroke="%231f3a5f" stroke-width="1.4" stroke-linejoin="round"/%3E%3Cpath d="M11.2 5.2h1.6v6h6v1.6h-6v6h-1.6v-6h-6v-1.6h6z" fill="%232f6fdf" opacity=".35"/%3E%3C/svg%3E") 12 12, cell;
+  --cur-col-resize: url("data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath d="M11 4h2v16h-2zM2.5 12l4-3.6v2.4h3v2.4h-3v2.4zM21.5 12l-4 3.6v-2.4h-3v-2.4h3V8.4z" fill="%232f6fdf" stroke="%23fff" stroke-width="1.4" stroke-linejoin="round" paint-order="stroke"/%3E%3C/svg%3E") 12 12, col-resize;
+  --cur-row-resize: url("data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"%3E%3Cpath d="M4 11v2h16v-2zM12 2.5l3.6 4h-2.4v3h-2.4v-3H8.4zM12 21.5l-3.6-4h2.4v-3h2.4v3h2.4z" fill="%232f6fdf" stroke="%23fff" stroke-width="1.4" stroke-linejoin="round" paint-order="stroke"/%3E%3C/svg%3E") 12 12, row-resize;
 }

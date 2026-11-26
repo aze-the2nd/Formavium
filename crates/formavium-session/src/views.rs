@@ -88,6 +88,8 @@ pub struct ColView {
     pub unit_placement: UnitPlacement,
     pub align: Align,
     pub width: Option<f32>,
+    /// Zellen enthalten LaTeX.
+    pub latex: bool,
 }
 
 #[derive(Serialize)]
@@ -111,6 +113,8 @@ pub struct LatexFieldView {
 pub struct RowView {
     pub id: String,
     pub cells: Vec<String>,
+    /// Je Spalte: mit der Zelle darüber verbunden.
+    pub merged: Vec<bool>,
 }
 
 #[derive(Serialize)]
@@ -312,6 +316,7 @@ fn elements(
                             unit_placement: c.unit_placement,
                             align: c.align,
                             width: c.width,
+                            latex: c.latex,
                         })
                         .collect(),
                     rows: data
@@ -322,6 +327,7 @@ fn elements(
                                 .iter()
                                 .map(|c| r.cells.get(&c.id).cloned().unwrap_or_default())
                                 .collect(),
+                            merged: cols.iter().map(|c| r.merged.contains(&c.id)).collect(),
                         })
                         .collect(),
                     path,
